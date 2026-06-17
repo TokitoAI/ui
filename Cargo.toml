@@ -14,10 +14,10 @@ categories = ["gui", "rendering::gui"]
 egui = "0.29"
 egui-phosphor = { version = "0.7", default-features = false, features = ["regular"] }
 egui_extras = "0.29"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 eframe = "0.29"
-image = { version = "0.25", default-features = false, features = ["png"] }
 
 [lints.clippy]
 too_many_arguments = "allow"

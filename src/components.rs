@@ -1509,10 +1509,12 @@ pub struct AppHeaderActions {
 /// `&mut is_editing` flag. Click the name to enter edit mode, Enter to commit
 /// (returns `renamed: true`), Esc to cancel (caller restores the previous
 /// name from its own copy if needed).
+///
+/// The brand block paints the Tokito mark (via [`crate::brand_mark`]) and
+/// `brand_label` next to it in the system font.
 pub fn app_header(
     ui: &mut Ui,
     t: &Tokens,
-    brand_glyph: &'static str,
     brand_label: &str,
     project_name: &mut String,
     is_editing: &mut bool,
@@ -1531,20 +1533,10 @@ pub fn app_header(
                 }
                 ui.add_space(t.space_2);
 
-                // Brand block: small accented disc + wordmark.
-                let disc = vec2(28.0, 28.0);
-                let (disc_rect, _) = ui.allocate_exact_size(disc, Sense::hover());
-                ui.painter()
-                    .rect_filled(disc_rect, t.rounding_sm(), t.accent);
-                ui.painter().text(
-                    disc_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    brand_glyph,
-                    icons::font(16.0),
-                    t.accent_ink,
-                );
+                // Brand block: Tokito mark + wordmark.
+                crate::brand::brand_mark(ui, 28.0);
                 ui.add_space(t.space_2);
-                ui.label(RichText::new(brand_label).strong().color(t.text));
+                ui.label(RichText::new(brand_label).strong().size(15.0).color(t.text));
 
                 // Divider `|`.
                 ui.add_space(t.space_3);

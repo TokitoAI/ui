@@ -19,11 +19,13 @@
 //! [`egui::Context::animate_bool`], so they are smooth without a retained
 //! scene graph.
 
+pub mod brand;
 pub mod components;
 pub mod icons;
 pub mod theme;
 pub mod tokens;
 
+pub use brand::brand_mark;
 pub use tokens::Tokens;
 
 /// Linear-interpolate between two colours (channel-wise, non-premultiplied).
