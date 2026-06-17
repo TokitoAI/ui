@@ -1532,9 +1532,10 @@ pub fn app_header(
                 }
                 ui.add_space(t.space_2);
 
-                // Brand block: the Tokito mark contains the wordmark in
-                // the design — no system-font label next to it.
-                crate::brand::brand_mark(ui, 28.0);
+                // Brand block: the "App icon" lockup (dark tile + mark).
+                // The mark itself carries the wordmark in the design, so
+                // no system-font label is rendered alongside.
+                crate::brand::brand_tile(ui, 34.0);
 
                 // Divider `|`.
                 ui.add_space(t.space_3);
