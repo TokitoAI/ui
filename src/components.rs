@@ -1510,12 +1510,11 @@ pub struct AppHeaderActions {
 /// (returns `renamed: true`), Esc to cancel (caller restores the previous
 /// name from its own copy if needed).
 ///
-/// The brand block paints the Tokito mark (via [`crate::brand_mark`]) and
-/// `brand_label` next to it in the system font.
+/// The brand block paints the Tokito mark (via [`crate::brand_mark`]); the
+/// mark itself carries the wordmark, so no system-font label is rendered.
 pub fn app_header(
     ui: &mut Ui,
     t: &Tokens,
-    brand_label: &str,
     project_name: &mut String,
     is_editing: &mut bool,
 ) -> AppHeaderActions {
@@ -1533,10 +1532,9 @@ pub fn app_header(
                 }
                 ui.add_space(t.space_2);
 
-                // Brand block: Tokito mark + wordmark.
+                // Brand block: the Tokito mark contains the wordmark in
+                // the design — no system-font label next to it.
                 crate::brand::brand_mark(ui, 28.0);
-                ui.add_space(t.space_2);
-                ui.label(RichText::new(brand_label).strong().size(15.0).color(t.text));
 
                 // Divider `|`.
                 ui.add_space(t.space_3);

@@ -239,7 +239,6 @@ impl Gallery {
         c::app_header(
             ui,
             t,
-            "Tokito",
             &mut self.header_project_name,
             &mut self.header_editing,
         );
