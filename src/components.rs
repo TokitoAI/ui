@@ -2334,11 +2334,11 @@ pub enum SuggestionCardAction {
 /// discards the whole batch regardless of per-row state.
 ///
 /// **Hover → canvas highlight.** When the user hovers a row, the function
-/// returns [`SuggestionCardAction::HoverOp(Some(i))`]; when hover leaves
-/// every row, [`HoverOp(None)`](SuggestionCardAction::HoverOp). Host
-/// surfaces use this to flash the affected refdes / net on the canvas
-/// (a cheap V1 substitute for full ghost-preview rendering, which is
-/// deferred per `docs/AI_ROADMAP.md` §B).
+/// returns [`SuggestionCardAction::HoverOp`] with `Some(i)`; when hover
+/// leaves every row, the variant carries `None`. Host surfaces use this
+/// to flash the affected refdes / net on the canvas (a cheap V1
+/// substitute for full ghost-preview rendering, which is deferred per
+/// `docs/AI_ROADMAP.md` §B in the tokito repo).
 pub fn suggestion_card(
     ui: &mut Ui,
     t: &Tokens,
