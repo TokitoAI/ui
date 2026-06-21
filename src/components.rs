@@ -2236,3 +2236,245 @@ pub fn sidebar_divider(ui: &mut Ui, t: &Tokens) {
     ui.separator();
     ui.add_space(t.space_1);
 }
+
+// ---------------------------------------------------------------------------
+// suggestion_card
+// ---------------------------------------------------------------------------
+
+/// Lifecycle of a [`suggestion_card`] — drives status badge styling + which
+/// footer buttons are enabled.
+///
+/// The caller owns this state and updates it in response to user interaction
+/// (Apply / Discard) and to drift events from the document layer (stale-on-
+/// apply rejection).
+#[derive(Clone, Debug)]
+pub enum SuggestionCardStatus {
+    /// User has not acted yet; Apply / Discard buttons are live.
+    Pending,
+    /// Every op in the batch applied successfully.
+    AppliedAll,
+    /// Some ops applied, others were unchecked before apply.
+    AppliedPartial { applied: usize, total: usize },
+    /// User dismissed the proposal without applying any op.
+    Discarded,
+    /// Apply was attempted but the underlying document had drifted since
+    /// the batch was proposed (see `docs/CHAT_SCHEMATIC_CONTROL.md`
+    /// §Snapshot + staleness). The card is now read-only.
+    StaleRejected,
+}
+
+/// Per-row state for [`suggestion_card`]. The caller initialises one entry
+/// per op (typically `vec![true; ops.len()]`) and the card mutates the
+/// selected flag in place as the user toggles per-op checkboxes.
+#[derive(Clone, Debug, Default)]
+pub struct SuggestionCardState {
+    /// One entry per op in the batch. `true` means the op will be applied
+    /// when the user clicks "Apply selected".
+    pub op_selected: Vec<bool>,
+    /// Last-hovered op index — reported back to the caller via
+    /// [`SuggestionCardAction::HoverOp`] so the host can mirror the hover
+    /// state into a canvas highlight without a second pass.
+    pub last_hover: Option<usize>,
+}
+
+impl SuggestionCardState {
+    /// Default state for a batch of `n` ops: all selected, no hover.
+    pub fn all_selected(n: usize) -> Self {
+        Self {
+            op_selected: vec![true; n],
+            last_hover: None,
+        }
+    }
+}
+
+/// One op row inside a [`suggestion_card`].
+///
+/// `summary` is the human-readable description (e.g. `"Add U3 (LM2596) at
+/// (120, 140)"`) — usually `SchematicEditOp::summary()` upstream.
+/// `provenance_label` is the short chip text (e.g. `"AI model"`, `"BOM"`,
+/// `"ERC fix"`) — typically derived from `EditProvenance` via the host's
+/// own label function.
+pub struct SuggestionOpRow<'a> {
+    pub summary: &'a str,
+    pub provenance_label: &'a str,
+}
+
+/// Events emitted by [`suggestion_card`] in a single frame. The card never
+/// mutates host state beyond the per-row selection flags; everything else
+/// is reported back via this enum so the host can decide what to do.
+#[derive(Clone, Debug)]
+pub enum SuggestionCardAction {
+    /// Hover landed on a different op row (or left the card). The host
+    /// uses this to highlight the affected element on the canvas — see
+    /// `docs/CHAT_SCHEMATIC_CONTROL.md` §Ghost preview on canvas — deferred.
+    HoverOp(Option<usize>),
+    /// "Apply selected" pressed. The host reads `state.op_selected` for
+    /// the accepted subset.
+    ApplySelected,
+    /// "Discard all" pressed.
+    DiscardAll,
+}
+
+/// The "AI proposes, you approve" surface — one bordered card showing a
+/// proposed batch of typed edit operations with per-op accept/reject
+/// checkboxes and a footer of bulk actions.
+///
+/// Rendered inline in chat (when the editor agent emits a Suggestion event)
+/// and also in the Build review panel. The card is the single primitive
+/// every AI mutation surface in Tokito routes through — keeping the apply
+/// gate consistent with the spec.
+///
+/// **Status semantics.** Apply / Discard buttons are enabled only while
+/// `status` is [`SuggestionCardStatus::Pending`]. Other states render as
+/// a read-only badge ("Applied", "Applied 2 of 3", "Discarded", "Stale —
+/// schematic changed; re-ask").
+///
+/// **Per-row vs bulk.** The footer's "Apply selected" applies only the ops
+/// whose `state.op_selected[i]` is `true`. The Discard button always
+/// discards the whole batch regardless of per-row state.
+///
+/// **Hover → canvas highlight.** When the user hovers a row, the function
+/// returns [`SuggestionCardAction::HoverOp(Some(i))`]; when hover leaves
+/// every row, [`HoverOp(None)`](SuggestionCardAction::HoverOp). Host
+/// surfaces use this to flash the affected refdes / net on the canvas
+/// (a cheap V1 substitute for full ghost-preview rendering, which is
+/// deferred per `docs/AI_ROADMAP.md` §B).
+pub fn suggestion_card(
+    ui: &mut Ui,
+    t: &Tokens,
+    header: &str,
+    status: SuggestionCardStatus,
+    ops: &[SuggestionOpRow<'_>],
+    state: &mut SuggestionCardState,
+) -> Option<SuggestionCardAction> {
+    // Defensive: keep per-row state in sync with the ops slice the caller
+    // passed this frame. Callers that mutate the batch shouldn't have to
+    // reach into op_selected manually.
+    if state.op_selected.len() != ops.len() {
+        state.op_selected.resize(ops.len(), true);
+    }
+
+    let mut action: Option<SuggestionCardAction> = None;
+    let interactive = matches!(status, SuggestionCardStatus::Pending);
+    let mut hover_this_frame: Option<usize> = None;
+
+    egui::Frame::none()
+        .fill(t.card)
+        .rounding(t.rounding_md())
+        .inner_margin(egui::Margin::same(t.space_4))
+        .stroke(Stroke::new(1.0, t.border))
+        .show(ui, |ui| {
+            // Header row: title + status badge on the right.
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(header).strong().color(t.text));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    suggestion_status_badge(ui, t, &status);
+                });
+            });
+            ui.add_space(t.space_2);
+
+            // Op rows.
+            for (i, op) in ops.iter().enumerate() {
+                let row_resp = render_op_row(ui, t, i, op, &mut state.op_selected[i], interactive);
+                if row_resp.hovered() {
+                    hover_this_frame = Some(i);
+                }
+            }
+
+            if !ops.is_empty() {
+                ui.add_space(t.space_2);
+                ui.separator();
+                ui.add_space(t.space_2);
+            }
+
+            // Footer: Apply selected / Discard all.
+            ui.horizontal(|ui| {
+                let applied_count = state.op_selected.iter().filter(|b| **b).count();
+                let apply_enabled = interactive && applied_count > 0;
+
+                let apply_label = if applied_count == ops.len() || applied_count == 0 {
+                    "Apply selected".to_string()
+                } else {
+                    format!("Apply selected ({applied_count})")
+                };
+
+                let apply_kind = if apply_enabled {
+                    ButtonKind::Primary
+                } else {
+                    ButtonKind::Secondary
+                };
+                let apply = text_button(ui, t, apply_kind, &apply_label, 32.0);
+                if apply.clicked() && apply_enabled {
+                    action = Some(SuggestionCardAction::ApplySelected);
+                }
+
+                let discard = text_button(ui, t, ButtonKind::Secondary, "Discard all", 32.0);
+                if discard.clicked() && interactive {
+                    action = Some(SuggestionCardAction::DiscardAll);
+                }
+            });
+        });
+
+    // Report hover change.
+    if hover_this_frame != state.last_hover {
+        state.last_hover = hover_this_frame;
+        if action.is_none() {
+            action = Some(SuggestionCardAction::HoverOp(hover_this_frame));
+        }
+    }
+
+    action
+}
+
+/// One op row: checkbox + summary + provenance chip + tiny right-justified
+/// space. The chip uses the existing [`badge`] primitive so it picks up the
+/// same border / fill / typography as elsewhere.
+fn render_op_row(
+    ui: &mut Ui,
+    t: &Tokens,
+    _index: usize,
+    op: &SuggestionOpRow<'_>,
+    selected: &mut bool,
+    interactive: bool,
+) -> Response {
+    // Reserve a horizontal row, allocate the whole strip as a hoverable
+    // sense rect so we can report hover even when the user moves between
+    // the checkbox and the label.
+    let row_height = 28.0;
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), row_height), Sense::hover());
+
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+        ui.horizontal(|ui| {
+            ui.add_space(2.0);
+            // Per-row checkbox (egui's native — cheap; the bespoke
+            // tokito_ui::checkbox is heavier-weight than needed here).
+            let cb = ui.add_enabled(interactive, egui::Checkbox::new(selected, ""));
+            ui.add_space(t.space_2);
+            ui.label(RichText::new(op.summary).color(t.text));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                badge(ui, t, op.provenance_label);
+            });
+            let _ = cb;
+        });
+    });
+
+    response
+}
+
+fn suggestion_status_badge(ui: &mut Ui, t: &Tokens, status: &SuggestionCardStatus) {
+    let label = match status {
+        SuggestionCardStatus::Pending => "Pending review",
+        SuggestionCardStatus::AppliedAll => "Applied",
+        SuggestionCardStatus::AppliedPartial { .. } => "Applied partial",
+        SuggestionCardStatus::Discarded => "Discarded",
+        SuggestionCardStatus::StaleRejected => "Stale — schematic changed",
+    };
+    let text = match status {
+        SuggestionCardStatus::AppliedPartial { applied, total } => {
+            format!("Applied {applied}/{total}")
+        }
+        _ => label.to_string(),
+    };
+    badge(ui, t, &text);
+}
