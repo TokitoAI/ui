@@ -1739,6 +1739,26 @@ pub fn chat_avatar(ui: &mut Ui, t: &Tokens, kind: BubbleKind, initials: &str) ->
     response
 }
 
+/// A standalone Phosphor glyph centered in a tinted disc — the hero/greeting
+/// avatar used by empty states (e.g. the chat "What do you want to build
+/// today?" surface). Unlike [`chat_avatar`] this is not tied to a
+/// [`BubbleKind`]: the caller picks the `glyph` and `diameter`, and the disc
+/// uses the chat-avatar fill with the brand `accent` ink. The glyph scales to
+/// ~46 % of the disc so larger avatars stay visually balanced.
+pub fn icon_avatar(ui: &mut Ui, t: &Tokens, glyph: &str, diameter: f32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::hover());
+    ui.painter()
+        .circle_filled(rect.center(), diameter * 0.5, t.chat_avatar_bg);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        icons::font(diameter * 0.46),
+        t.accent,
+    );
+    response
+}
+
 /// A single chat message bubble.
 ///
 /// The bubble is left-aligned with the assistant avatar for `Assistant`, and
