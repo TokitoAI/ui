@@ -2256,12 +2256,13 @@ pub fn thread_row(
 
     let pad = t.space_2;
     let inner = rect.shrink2(vec2(pad + 4.0, pad));
+    let painter = ui.painter().with_clip_rect(inner);
     let mut top = inner.left_top();
     let title_y = top.y + 8.0;
     let preview_y = top.y + 28.0;
 
     if workshop {
-        ui.painter().text(
+        painter.text(
             pos2(top.x, title_y),
             egui::Align2::LEFT_CENTER,
             icons::ph::GLOBE,
@@ -2272,37 +2273,56 @@ pub fn thread_row(
     }
     // Selected vs unselected uses the row's wash (`accent_soft`) as the
     // signal; title text stays the same ink either way for legibility.
-    ui.painter().text(
+    let time_font = TextStyle::Small.resolve(ui.style());
+    let time_width = if time.is_empty() {
+        0.0
+    } else {
+        ui.painter()
+            .layout_no_wrap(time.to_owned(), time_font.clone(), Color32::WHITE)
+            .size()
+            .x
+            + t.space_2
+    };
+    let title_width = (inner.right() - time_width - top.x).max(0.0);
+    painter.text(
         pos2(top.x, title_y),
         egui::Align2::LEFT_CENTER,
-        title,
+        truncate_for(ui, title, TextStyle::Body, title_width),
         TextStyle::Body.resolve(ui.style()),
         t.text,
     );
 
     // Time right-aligned on the top row.
-    ui.painter().text(
+    painter.text(
         pos2(inner.right(), title_y),
         egui::Align2::RIGHT_CENTER,
         time,
-        TextStyle::Small.resolve(ui.style()),
+        time_font,
         t.text_3,
     );
 
-    // Preview — single-line, hard truncate.
-    ui.painter().text(
+    // Preview -- single-line, hard truncate.
+    painter.text(
         pos2(inner.left(), preview_y),
         egui::Align2::LEFT_CENTER,
-        truncate_for(ui, preview, inner.width()),
+        truncate_for(ui, preview, TextStyle::Small, inner.width()),
         TextStyle::Small.resolve(ui.style()),
-        t.text_3,
+        if selected { t.text_2 } else { t.text_3 },
     );
 
     response
 }
 
-fn truncate_for(ui: &Ui, s: &str, max_w: f32) -> String {
-    let style = TextStyle::Small.resolve(ui.style());
+fn truncate_for(ui: &Ui, s: &str, text_style: TextStyle, max_w: f32) -> String {
+    if max_w <= 0.0 {
+        return String::new();
+    }
+    let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let s = one_line.trim();
+    if s.is_empty() {
+        return String::new();
+    }
+    let style = text_style.resolve(ui.style());
     let galley = ui
         .painter()
         .layout_no_wrap(s.to_string(), style.clone(), Color32::WHITE);
