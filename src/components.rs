@@ -2530,38 +2530,40 @@ pub fn suggestion_card(
                 }
             }
 
-            if !ops.is_empty() {
+            if interactive && !ops.is_empty() {
                 ui.add_space(t.space_2);
                 ui.separator();
                 ui.add_space(t.space_2);
             }
 
             // Footer: Apply selected / Discard all.
-            ui.horizontal(|ui| {
-                let applied_count = state.op_selected.iter().filter(|b| **b).count();
-                let apply_enabled = interactive && applied_count > 0;
+            if interactive {
+                ui.horizontal(|ui| {
+                    let applied_count = state.op_selected.iter().filter(|b| **b).count();
+                    let apply_enabled = applied_count > 0;
 
-                let apply_label = if applied_count == ops.len() || applied_count == 0 {
-                    "Apply selected".to_string()
-                } else {
-                    format!("Apply selected ({applied_count})")
-                };
+                    let apply_label = if applied_count == ops.len() || applied_count == 0 {
+                        "Apply selected".to_string()
+                    } else {
+                        format!("Apply selected ({applied_count})")
+                    };
 
-                let apply_kind = if apply_enabled {
-                    ButtonKind::Primary
-                } else {
-                    ButtonKind::Secondary
-                };
-                let apply = text_button(ui, t, apply_kind, &apply_label, 32.0);
-                if apply.clicked() && apply_enabled {
-                    action = Some(SuggestionCardAction::ApplySelected);
-                }
+                    let apply_kind = if apply_enabled {
+                        ButtonKind::Primary
+                    } else {
+                        ButtonKind::Secondary
+                    };
+                    let apply = text_button(ui, t, apply_kind, &apply_label, 32.0);
+                    if apply.clicked() && apply_enabled {
+                        action = Some(SuggestionCardAction::ApplySelected);
+                    }
 
-                let discard = text_button(ui, t, ButtonKind::Secondary, "Discard all", 32.0);
-                if discard.clicked() && interactive {
-                    action = Some(SuggestionCardAction::DiscardAll);
-                }
-            });
+                    let discard = text_button(ui, t, ButtonKind::Secondary, "Discard all", 32.0);
+                    if discard.clicked() {
+                        action = Some(SuggestionCardAction::DiscardAll);
+                    }
+                });
+            }
         });
 
     // Report hover change.
