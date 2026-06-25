@@ -1273,38 +1273,144 @@ pub enum ToastKind {
     Error,
 }
 
-/// One transient notification message.
+impl ToastKind {
+    /// Leading Phosphor glyph painted in the toast header.
+    fn icon(self) -> &'static str {
+        match self {
+            ToastKind::Info => icons::ph::INFO,
+            ToastKind::Success => icons::ph::CHECK_CIRCLE,
+            ToastKind::Warning => icons::ph::WARNING,
+            ToastKind::Error => icons::ph::WARNING_CIRCLE,
+        }
+    }
+
+    /// Short header label.
+    fn title(self) -> &'static str {
+        match self {
+            ToastKind::Info => "Info",
+            ToastKind::Success => "Success",
+            ToastKind::Warning => "Warning",
+            ToastKind::Error => "Error",
+        }
+    }
+
+    /// The kind's accent colour (icon, title, border).
+    fn accent(self, t: &Tokens) -> Color32 {
+        match self {
+            ToastKind::Info => t.accent,
+            ToastKind::Success => t.success,
+            ToastKind::Warning => t.warning,
+            ToastKind::Error => t.danger,
+        }
+    }
+
+    /// Whether a toast of this kind persists until manually dismissed.
+    /// Errors and warnings are actionable, so they stick; transient
+    /// info/success toasts auto-expire after [`ToastStack::DEFAULT_TTL`].
+    fn sticky(self) -> bool {
+        matches!(self, ToastKind::Error | ToastKind::Warning)
+    }
+}
+
+/// One notification message.
 #[derive(Debug, Clone)]
 pub struct Toast {
+    /// Stable identity, used to dismiss a specific toast.
+    id: u64,
+    /// Optional dedupe key. A keyed toast replaces any existing toast with
+    /// the same key instead of stacking a duplicate — for live status that
+    /// updates in place (e.g. an ERC summary) rather than discrete events.
+    key: Option<String>,
     /// What the user sees.
     pub message: String,
-    /// Visual class.
+    /// Visual + semantic class.
     pub kind: ToastKind,
-    /// When this toast expires. Defaults to ~4 s after `push`.
-    pub until: std::time::Instant,
+    /// When this toast auto-expires. `None` means it sticks until the user
+    /// dismisses it with the ✕ button (errors and warnings).
+    until: Option<std::time::Instant>,
 }
 
 /// A queue of [`Toast`]s, drained by [`toast_overlay`].
 ///
 /// Holders own this struct in their app state and call `push` from anywhere
 /// in the update loop; once per frame they hand it to [`toast_overlay`] to
-/// paint. Expired entries are pruned automatically.
+/// paint. Expired entries are pruned automatically; sticky entries stay until
+/// dismissed.
 #[derive(Debug, Default, Clone)]
 pub struct ToastStack {
     items: Vec<Toast>,
+    next_id: u64,
 }
 
 impl ToastStack {
-    /// Default visible time per toast — currently 4 seconds.
+    /// Default visible time per non-sticky toast — currently 4 seconds.
     pub const DEFAULT_TTL: std::time::Duration = std::time::Duration::from_secs(4);
 
-    /// Push a new toast with `kind` and the default 4 s TTL.
+    /// Newest toasts rendered at once; older live ones queue behind them.
+    pub const MAX_VISIBLE: usize = 5;
+
+    fn alloc_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        id
+    }
+
+    fn expiry(kind: ToastKind) -> Option<std::time::Instant> {
+        if kind.sticky() {
+            None
+        } else {
+            Some(std::time::Instant::now() + Self::DEFAULT_TTL)
+        }
+    }
+
+    /// Push a new toast. Sticky kinds (error/warning) persist until dismissed;
+    /// others auto-expire after [`Self::DEFAULT_TTL`].
     pub fn push(&mut self, message: impl Into<String>, kind: ToastKind) {
+        let id = self.alloc_id();
         self.items.push(Toast {
+            id,
+            key: None,
             message: message.into(),
             kind,
-            until: std::time::Instant::now() + Self::DEFAULT_TTL,
+            until: Self::expiry(kind),
         });
+    }
+
+    /// Upsert a **keyed** toast: if one with `key` already exists its message
+    /// and kind are updated in place; otherwise a new one is inserted. Use for
+    /// live status that changes over time rather than discrete events, so it
+    /// never stacks duplicates. Keyed toasts are always sticky.
+    pub fn set_keyed(
+        &mut self,
+        key: impl Into<String>,
+        message: impl Into<String>,
+        kind: ToastKind,
+    ) {
+        let key = key.into();
+        let message = message.into();
+        if let Some(existing) = self
+            .items
+            .iter_mut()
+            .find(|t| t.key.as_deref() == Some(&key))
+        {
+            existing.message = message;
+            existing.kind = kind;
+            existing.until = None;
+            return;
+        }
+        let id = self.alloc_id();
+        self.items.push(Toast {
+            id,
+            key: Some(key),
+            message,
+            kind,
+            until: None,
+        });
+    }
+
+    /// Remove the keyed toast with `key`, if present. No-op otherwise.
+    pub fn clear_keyed(&mut self, key: &str) {
+        self.items.retain(|t| t.key.as_deref() != Some(key));
     }
 
     /// Push an [`ToastKind::Info`] toast.
@@ -1327,56 +1433,79 @@ impl ToastStack {
         self.push(message, ToastKind::Error);
     }
 
-    /// True when there are no live (non-expired) toasts.
+    /// True when there are no live toasts.
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
 
     fn prune(&mut self) {
         let now = std::time::Instant::now();
-        self.items.retain(|t| t.until > now);
+        self.items.retain(|t| t.until.map_or(true, |u| u > now));
     }
 }
 
-/// Paint any live toasts anchored to the bottom-right of the egui screen.
+/// Paint live toasts anchored to the bottom-right of the egui screen.
 ///
-/// Call once per frame. The stack is mutated in place: expired toasts are
-/// pruned before painting, and egui is asked to repaint while a toast is
-/// still live so the auto-dismissal happens on time.
+/// Call once per frame. The stack is mutated in place: expired (non-sticky)
+/// toasts are pruned, toasts the user dismisses via the ✕ button are removed,
+/// and egui is asked to repaint while a timed toast is still live so its
+/// auto-dismissal happens on time. Each toast shows a kind icon + title, the
+/// message, and a dismiss button.
 pub fn toast_overlay(ctx: &egui::Context, t: &Tokens, stack: &mut ToastStack) {
     stack.prune();
     if stack.is_empty() {
         return;
     }
 
-    // Repaint while we still have live toasts so they vanish on time even
-    // when nothing else moves on screen.
-    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    // Keep repainting only while a *timed* toast is live, so it vanishes on
+    // time even when nothing else moves; all-sticky stacks need no ticking.
+    if stack.items.iter().any(|toast| toast.until.is_some()) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
 
+    let mut dismiss: Option<u64> = None;
     egui::Area::new(egui::Id::new("tokito_ui_toasts"))
         .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
         .show(ctx, |ui| {
             ui.vertical(|ui| {
                 // Newest-first: most-recent push appears on top.
-                for toast in stack.items.iter().rev() {
-                    let (border, ink) = match toast.kind {
-                        ToastKind::Info => (t.accent, t.text),
-                        ToastKind::Success => (t.success, t.success),
-                        ToastKind::Warning => (t.warning, t.warning),
-                        ToastKind::Error => (t.danger, t.danger),
-                    };
+                for toast in stack.items.iter().rev().take(ToastStack::MAX_VISIBLE) {
+                    let accent = toast.kind.accent(t);
                     egui::Frame::popup(ui.style())
                         .fill(t.card)
-                        .stroke(Stroke::new(1.0, border))
+                        .stroke(Stroke::new(1.0, accent))
                         .rounding(t.rounding_md())
-                        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
                         .show(ui, |ui| {
-                            ui.label(RichText::new(&toast.message).color(ink));
+                            ui.set_width(300.0);
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(toast.kind.icon())
+                                        .color(accent)
+                                        .font(icons::font(15.0)),
+                                );
+                                ui.add_space(t.space_1);
+                                ui.label(RichText::new(toast.kind.title()).strong().color(accent));
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if icon_button(ui, t, icons::ph::X, 20.0, t.text_3).clicked() {
+                                        dismiss = Some(toast.id);
+                                    }
+                                });
+                            });
+                            ui.add_space(t.space_1);
+                            ui.add(
+                                egui::Label::new(RichText::new(&toast.message).color(t.text))
+                                    .wrap(),
+                            );
                         });
                     ui.add_space(t.space_2);
                 }
             });
         });
+
+    if let Some(id) = dismiss {
+        stack.items.retain(|toast| toast.id != id);
+    }
 }
 
 // ---------------------------------------------------------------------------
