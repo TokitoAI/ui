@@ -68,7 +68,8 @@ pub fn card(ui: &mut Ui, t: &Tokens, size: Vec2, add_contents: impl FnOnce(&mut 
 /// A dashed "create new …" tile of fixed `size`.
 ///
 /// Centred: a circular `+` mark over `label` (and optional `sublabel`). On
-/// hover the dashed border and wash ease toward the accent.
+/// hover the dashed border eases toward the accent while the tile body stays
+/// transparent.
 pub fn new_tile(
     ui: &mut Ui,
     t: &Tokens,
@@ -79,10 +80,6 @@ pub fn new_tile(
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hv = hover_t(ui, response.id, response.hovered());
 
-    if hv > 0.001 {
-        ui.painter()
-            .rect_filled(rect, t.rounding_md(), t.accent_soft.gamma_multiply(hv));
-    }
     let border = lerp_color(t.border_strong, t.accent, hv);
     paint_dashed_rect(ui.painter(), rect.shrink(1.0), border, 1.5, 6.0, 4.0);
 
