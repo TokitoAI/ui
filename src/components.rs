@@ -1786,18 +1786,26 @@ fn tab_pill(ui: &mut Ui, t: &Tokens, icon: &str, label: &str, selected: bool) ->
     let (rect, response) = ui.allocate_exact_size(vec2(w, h), Sense::click());
     let hv = hover_t(ui, response.id, response.hovered());
 
+    // Active tab reads as a *defined* tinted pill (soft accent wash + 1px
+    // accent border + accent ink), not a solid-mint slab. Keeps mint as a
+    // hierarchy signal instead of flooding it across the chrome — the same
+    // "soft tint + border" language the active thread row uses.
     let fill = if selected {
-        t.accent
+        t.accent_soft
     } else {
         lerp_color(Color32::TRANSPARENT, t.card_hover, hv)
     };
     let ink = if selected {
-        t.accent_ink
+        t.accent
     } else {
         lerp_color(t.text_2, t.text, hv)
     };
 
     ui.painter().rect_filled(rect, t.rounding_sm(), fill);
+    if selected {
+        ui.painter()
+            .rect_stroke(rect.shrink(0.5), t.rounding_sm(), Stroke::new(1.0, t.accent));
+    }
 
     let mut x = rect.left() + pad;
     let center_y = rect.center().y;
@@ -2250,6 +2258,12 @@ pub fn thread_row(
         lerp_color(Color32::TRANSPARENT, t.card_hover, hv)
     };
     ui.painter().rect_filled(rect, t.rounding_sm(), fill);
+    // Active row: 1px accent border turns the soft wash into a defined card
+    // instead of a muddy slab (matches the active tab pill).
+    if selected {
+        ui.painter()
+            .rect_stroke(rect.shrink(0.5), t.rounding_sm(), Stroke::new(1.0, t.accent));
+    }
 
     let pad = t.space_2;
     let inner = rect.shrink2(vec2(pad + 4.0, pad));
@@ -2375,14 +2389,25 @@ pub fn conversation_sidebar(
                         .color(t.text_2),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if icon_button(ui, t, icons::ph::CARET_DOUBLE_LEFT, 22.0, t.text_2).clicked() {
+                    ui.spacing_mut().item_spacing.x = t.space_1;
+                    if icon_button(ui, t, icons::ph::CARET_DOUBLE_LEFT, 26.0, t.text_2)
+                        .on_hover_text("Collapse sidebar")
+                        .clicked()
+                    {
                         out = Some(SidebarAction::Collapse);
                     }
-                    if icon_button(ui, t, icons::ph::PLUS, 22.0, t.text_2).clicked() {
+                    if icon_button(ui, t, icons::ph::PLUS, 26.0, t.text_2)
+                        .on_hover_text("New conversation")
+                        .clicked()
+                    {
                         out = Some(SidebarAction::NewConversation);
                     }
                 });
             });
+            // Ground the title + buttons as a header band with a hairline,
+            // so the controls stop reading as floating glyphs.
+            ui.add_space(t.space_1);
+            ui.separator();
             ui.add_space(t.space_2);
 
             egui::ScrollArea::vertical()
