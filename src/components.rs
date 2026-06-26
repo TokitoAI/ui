@@ -1938,9 +1938,9 @@ pub fn chat_bubble(
 /// Assistant activity bubble for slow background work.
 ///
 /// This is the "premium but quiet" loading state for chat: normal assistant
-/// bubble chrome, a compact status row, three breathing dots, and two
-/// skeleton-style shimmer lines. It deliberately avoids backend/provider
-/// wording; the host supplies product-facing `label` and `detail` copy.
+/// bubble chrome, a compact status row, three breathing dots, and product-
+/// facing detail copy. It deliberately avoids backend/provider wording; the
+/// host supplies the `label` and `detail` copy.
 ///
 /// `id_source` scopes child ids so multiple activity bubbles can coexist
 /// without reflow making their animation state fight.
@@ -1959,8 +1959,6 @@ pub fn chat_activity(ui: &mut Ui, t: &Tokens, id_source: impl Hash, label: &str,
                 vec2(content_width, 0.0),
                 Layout::top_down(Align::Min).with_cross_justify(true),
                 |ui| {
-                    let phase = (time * 0.48).fract();
-
                     ui.horizontal(|ui| {
                         badge(ui, t, label);
                         ui.add_space(t.space_1);
@@ -1974,11 +1972,6 @@ pub fn chat_activity(ui: &mut Ui, t: &Tokens, id_source: impl Hash, label: &str,
                                 .wrap(),
                         );
                     }
-
-                    ui.add_space(t.space_3);
-                    activity_rail(ui, t, phase, 0.92);
-                    ui.add_space(t.space_1);
-                    activity_rail(ui, t, (phase + 0.34).fract(), 0.64);
                 },
             );
         });
@@ -1996,60 +1989,6 @@ fn activity_dots(ui: &mut Ui, t: &Tokens, time: f32) -> Response {
         painter.circle_filled(pos2(x, rect.center().y), radius, ink.gamma_multiply(0.75));
     }
     response
-}
-
-fn activity_rail(ui: &mut Ui, t: &Tokens, phase: f32, width_factor: f32) -> Response {
-    let width = (ui.available_width() * width_factor.clamp(0.2, 1.0)).max(0.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 4.0), Sense::hover());
-    let rounding = egui::Rounding::same(2.0);
-    let painter = ui.painter();
-    painter.rect_filled(rect, rounding, t.border_soft.gamma_multiply(0.82));
-
-    if rect.width() <= 1.0 {
-        return response;
-    }
-
-    let span = (rect.width() * 0.36).clamp(24.0, 120.0);
-    let lead = rect.left() - span + (rect.width() + span) * phase;
-    let core = Rect::from_min_size(pos2(lead, rect.top()), vec2(span, rect.height()));
-    let before = Rect::from_min_size(
-        pos2(lead - span * 0.45, rect.top()),
-        vec2(span * 0.5, rect.height()),
-    );
-    let after = Rect::from_min_size(
-        pos2(lead + span * 0.82, rect.top()),
-        vec2(span * 0.42, rect.height()),
-    );
-
-    paint_clipped_rect(
-        painter,
-        before,
-        rect,
-        rounding,
-        t.accent_2.gamma_multiply(0.18),
-    );
-    paint_clipped_rect(painter, core, rect, rounding, t.accent.gamma_multiply(0.62));
-    paint_clipped_rect(
-        painter,
-        after,
-        rect,
-        rounding,
-        t.accent.gamma_multiply(0.24),
-    );
-    response
-}
-
-fn paint_clipped_rect(
-    painter: &egui::Painter,
-    rect: Rect,
-    clip: Rect,
-    rounding: egui::Rounding,
-    fill: Color32,
-) {
-    let clipped = rect.intersect(clip);
-    if clipped.width() > 0.0 && clipped.height() > 0.0 {
-        painter.rect_filled(clipped, rounding, fill);
-    }
 }
 
 /// State for [`chat_composer`].
