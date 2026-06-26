@@ -21,7 +21,7 @@ use egui::{
     pos2, vec2, Align, Color32, Layout, Pos2, Rect, Response, RichText, Sense, Stroke, TextStyle,
     Ui, UiBuilder, Vec2,
 };
-use std::hash::Hash;
+use std::{hash::Hash, time::Duration};
 
 /// How long a hover transition takes, in seconds.
 const HOVER_TIME: f32 = 0.11;
@@ -1803,8 +1803,11 @@ fn tab_pill(ui: &mut Ui, t: &Tokens, icon: &str, label: &str, selected: bool) ->
 
     ui.painter().rect_filled(rect, t.rounding_sm(), fill);
     if selected {
-        ui.painter()
-            .rect_stroke(rect.shrink(0.5), t.rounding_sm(), Stroke::new(1.0, t.accent));
+        ui.painter().rect_stroke(
+            rect.shrink(0.5),
+            t.rounding_sm(),
+            Stroke::new(1.0, t.accent),
+        );
     }
 
     let mut x = rect.left() + pad;
@@ -1930,6 +1933,107 @@ pub fn chat_bubble(
                 body(ui);
             });
     });
+}
+
+/// Assistant activity bubble for slow background work.
+///
+/// This is the "premium but quiet" loading state for chat: normal assistant
+/// bubble chrome, a compact status row, three breathing dots, and a thin
+/// shimmer rail. It deliberately avoids backend/provider wording; the host
+/// supplies product-facing `label` and `detail` copy.
+///
+/// `id_source` scopes child ids so multiple activity bubbles can coexist
+/// without reflow making their animation state fight.
+pub fn chat_activity(ui: &mut Ui, t: &Tokens, id_source: impl Hash, label: &str, detail: &str) {
+    ui.ctx().request_repaint_after(Duration::from_millis(50));
+    ui.push_id(id_source, |ui| {
+        chat_bubble(ui, t, BubbleKind::Assistant, "", |ui| {
+            ui.set_min_width(ui.available_width().min(280.0));
+            let time = ui.ctx().input(|i| i.time) as f32;
+            let phase = (time * 0.48).fract();
+
+            ui.horizontal_wrapped(|ui| {
+                badge(ui, t, label);
+                ui.add_space(t.space_1);
+                activity_dots(ui, t, time);
+            });
+
+            if !detail.trim().is_empty() {
+                ui.add_space(t.space_2);
+                ui.add(egui::Label::new(RichText::new(detail).italics().color(t.text_2)).wrap());
+            }
+
+            ui.add_space(t.space_2);
+            activity_rail(ui, t, phase);
+        });
+    });
+}
+
+fn activity_dots(ui: &mut Ui, t: &Tokens, time: f32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(34.0, 14.0), Sense::hover());
+    let painter = ui.painter();
+    for i in 0..3 {
+        let x = rect.left() + 7.0 + i as f32 * 10.0;
+        let wave = ((time * 2.8 + i as f32 * 0.72).sin() * 0.5 + 0.5).clamp(0.0, 1.0);
+        let radius = 2.0 + wave * 1.2;
+        let ink = lerp_color(t.text_3, t.accent, 0.35 + wave * 0.55);
+        painter.circle_filled(pos2(x, rect.center().y), radius, ink.gamma_multiply(0.75));
+    }
+    response
+}
+
+fn activity_rail(ui: &mut Ui, t: &Tokens, phase: f32) -> Response {
+    let width = ui.available_width().clamp(0.0, 420.0);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 3.0), Sense::hover());
+    let rounding = egui::Rounding::same(2.0);
+    let painter = ui.painter();
+    painter.rect_filled(rect, rounding, t.border_soft);
+
+    if rect.width() <= 1.0 {
+        return response;
+    }
+
+    let span = (rect.width() * 0.36).clamp(24.0, 120.0);
+    let lead = rect.left() - span + (rect.width() + span) * phase;
+    let core = Rect::from_min_size(pos2(lead, rect.top()), vec2(span, rect.height()));
+    let before = Rect::from_min_size(
+        pos2(lead - span * 0.45, rect.top()),
+        vec2(span * 0.5, rect.height()),
+    );
+    let after = Rect::from_min_size(
+        pos2(lead + span * 0.82, rect.top()),
+        vec2(span * 0.42, rect.height()),
+    );
+
+    paint_clipped_rect(
+        painter,
+        before,
+        rect,
+        rounding,
+        t.accent_2.gamma_multiply(0.18),
+    );
+    paint_clipped_rect(painter, core, rect, rounding, t.accent.gamma_multiply(0.62));
+    paint_clipped_rect(
+        painter,
+        after,
+        rect,
+        rounding,
+        t.accent.gamma_multiply(0.24),
+    );
+    response
+}
+
+fn paint_clipped_rect(
+    painter: &egui::Painter,
+    rect: Rect,
+    clip: Rect,
+    rounding: egui::Rounding,
+    fill: Color32,
+) {
+    let clipped = rect.intersect(clip);
+    if clipped.width() > 0.0 && clipped.height() > 0.0 {
+        painter.rect_filled(clipped, rounding, fill);
+    }
 }
 
 /// State for [`chat_composer`].
@@ -2261,8 +2365,11 @@ pub fn thread_row(
     // Active row: 1px accent border turns the soft wash into a defined card
     // instead of a muddy slab (matches the active tab pill).
     if selected {
-        ui.painter()
-            .rect_stroke(rect.shrink(0.5), t.rounding_sm(), Stroke::new(1.0, t.accent));
+        ui.painter().rect_stroke(
+            rect.shrink(0.5),
+            t.rounding_sm(),
+            Stroke::new(1.0, t.accent),
+        );
     }
 
     let pad = t.space_2;

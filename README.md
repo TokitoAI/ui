@@ -132,6 +132,7 @@ All live in `tokito_ui::components` (aliased `c` above). Each takes
 | `inspector_row` | `inspector_row(ui, t, label, value)` | Label-on-left, value-on-right key/value row for inspector / property panels. |
 | `list_section_label` | `list_section_label(ui, t, label, count)` | "Symbols (24)" style group label for dense side-panel lists. |
 | `empty_state` | `empty_state(ui, t, message)` | Centred "nothing here" placeholder card. |
+| `chat_activity` | `chat_activity(ui, t, id_source, label, detail)` | Assistant loading/activity bubble with subtle dots and a shimmer rail for slow background work. |
 
 ### Icons
 
