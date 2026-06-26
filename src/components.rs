@@ -2539,9 +2539,28 @@ pub fn suggestion_card(
             });
             ui.add_space(t.space_2);
 
+            // Per-row chips only earn their place when they DIFFER across rows
+            // (e.g. a partial apply: some "Applied", some "Skipped"). When every
+            // row carries the same label it just parrots the header status badge
+            // in a noisy, far-floating column — drop it entirely.
+            let distinct_labels: std::collections::HashSet<&str> = ops
+                .iter()
+                .map(|o| o.provenance_label)
+                .filter(|s| !s.is_empty())
+                .collect();
+            let show_row_badges = distinct_labels.len() > 1;
+
             // Op rows.
             for (i, op) in ops.iter().enumerate() {
-                let row_resp = render_op_row(ui, t, i, op, &mut state.op_selected[i], interactive);
+                let row_resp = render_op_row(
+                    ui,
+                    t,
+                    i,
+                    op,
+                    &mut state.op_selected[i],
+                    interactive,
+                    show_row_badges,
+                );
                 if row_resp.hovered() {
                     hover_this_frame = Some(i);
                 }
@@ -2594,9 +2613,11 @@ pub fn suggestion_card(
     action
 }
 
-/// One op row: checkbox + summary + provenance chip + tiny right-justified
-/// space. The chip uses the existing [`badge`] primitive so it picks up the
-/// same border / fill / typography as elsewhere.
+/// One op row: checkbox + summary, and — only when `show_badge` is set — a
+/// right-justified provenance/status chip. The chip uses the existing
+/// [`badge`] primitive so it picks up the same border / fill / typography as
+/// elsewhere. `show_badge` is false when every row shares the same label, so
+/// the card doesn't repeat the header status on every line.
 fn render_op_row(
     ui: &mut Ui,
     t: &Tokens,
@@ -2604,6 +2625,7 @@ fn render_op_row(
     op: &SuggestionOpRow<'_>,
     selected: &mut bool,
     interactive: bool,
+    show_badge: bool,
 ) -> Response {
     // Reserve a horizontal row, allocate the whole strip as a hoverable
     // sense rect so we can report hover even when the user moves between
@@ -2620,9 +2642,11 @@ fn render_op_row(
             let cb = ui.add_enabled(interactive, egui::Checkbox::new(selected, ""));
             ui.add_space(t.space_2);
             ui.label(RichText::new(op.summary).color(t.text));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                badge(ui, t, op.provenance_label);
-            });
+            if show_badge && !op.provenance_label.is_empty() {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    badge(ui, t, op.provenance_label);
+                });
+            }
             let _ = cb;
         });
     });
