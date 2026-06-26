@@ -1938,9 +1938,9 @@ pub fn chat_bubble(
 /// Assistant activity bubble for slow background work.
 ///
 /// This is the "premium but quiet" loading state for chat: normal assistant
-/// bubble chrome, a compact status row, three breathing dots, and a thin
-/// shimmer rail. It deliberately avoids backend/provider wording; the host
-/// supplies product-facing `label` and `detail` copy.
+/// bubble chrome, a compact status row, three breathing dots, and two
+/// skeleton-style shimmer lines. It deliberately avoids backend/provider
+/// wording; the host supplies product-facing `label` and `detail` copy.
 ///
 /// `id_source` scopes child ids so multiple activity bubbles can coexist
 /// without reflow making their animation state fight.
@@ -1948,23 +1948,39 @@ pub fn chat_activity(ui: &mut Ui, t: &Tokens, id_source: impl Hash, label: &str,
     ui.ctx().request_repaint_after(Duration::from_millis(50));
     ui.push_id(id_source, |ui| {
         chat_bubble(ui, t, BubbleKind::Assistant, "", |ui| {
-            ui.set_min_width(ui.available_width().min(280.0));
+            let available = ui.available_width().max(0.0);
+            let content_width = if available < 240.0 {
+                available
+            } else {
+                available.min(420.0)
+            };
             let time = ui.ctx().input(|i| i.time) as f32;
-            let phase = (time * 0.48).fract();
+            ui.allocate_ui_with_layout(
+                vec2(content_width, 0.0),
+                Layout::top_down(Align::Min).with_cross_justify(true),
+                |ui| {
+                    let phase = (time * 0.48).fract();
 
-            ui.horizontal_wrapped(|ui| {
-                badge(ui, t, label);
-                ui.add_space(t.space_1);
-                activity_dots(ui, t, time);
-            });
+                    ui.horizontal(|ui| {
+                        badge(ui, t, label);
+                        ui.add_space(t.space_1);
+                        activity_dots(ui, t, time);
+                    });
 
-            if !detail.trim().is_empty() {
-                ui.add_space(t.space_2);
-                ui.add(egui::Label::new(RichText::new(detail).italics().color(t.text_2)).wrap());
-            }
+                    if !detail.trim().is_empty() {
+                        ui.add_space(t.space_2);
+                        ui.add(
+                            egui::Label::new(RichText::new(detail).italics().color(t.text_2))
+                                .wrap(),
+                        );
+                    }
 
-            ui.add_space(t.space_2);
-            activity_rail(ui, t, phase);
+                    ui.add_space(t.space_3);
+                    activity_rail(ui, t, phase, 0.92);
+                    ui.add_space(t.space_1);
+                    activity_rail(ui, t, (phase + 0.34).fract(), 0.64);
+                },
+            );
         });
     });
 }
@@ -1982,12 +1998,12 @@ fn activity_dots(ui: &mut Ui, t: &Tokens, time: f32) -> Response {
     response
 }
 
-fn activity_rail(ui: &mut Ui, t: &Tokens, phase: f32) -> Response {
-    let width = ui.available_width().clamp(0.0, 420.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 3.0), Sense::hover());
+fn activity_rail(ui: &mut Ui, t: &Tokens, phase: f32, width_factor: f32) -> Response {
+    let width = (ui.available_width() * width_factor.clamp(0.2, 1.0)).max(0.0);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 4.0), Sense::hover());
     let rounding = egui::Rounding::same(2.0);
     let painter = ui.painter();
-    painter.rect_filled(rect, rounding, t.border_soft);
+    painter.rect_filled(rect, rounding, t.border_soft.gamma_multiply(0.82));
 
     if rect.width() <= 1.0 {
         return response;
