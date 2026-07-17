@@ -414,7 +414,10 @@ fn bordered_input(
     edit_ui.add(
         egui::TextEdit::singleline(value)
             .id(id)
-            .hint_text(hint)
+            // Explicitly dim — egui's default hint color tracks the theme's
+            // weak text, which in our dark tokens is nearly full-ink and
+            // reads as real content.
+            .hint_text(egui::RichText::new(hint).color(t.text_3))
             .frame(false)
             .password(mask)
             .desired_width(edit_rect.width()),
