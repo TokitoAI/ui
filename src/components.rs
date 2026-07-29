@@ -1638,6 +1638,8 @@ pub struct AppHeaderActions {
 /// `&mut is_editing` flag. Click the name to enter edit mode, Enter to commit
 /// (returns `renamed: true`), Esc to cancel (caller restores the previous
 /// name from its own copy if needed).
+/// `status` optionally renders a shared chip beside the name; the boolean
+/// selects its active/accent treatment.
 ///
 /// The brand block paints the Tokito mark (via [`crate::brand_mark`]); the
 /// mark itself carries the wordmark, so no system-font label is rendered.
@@ -1646,6 +1648,7 @@ pub fn app_header(
     t: &Tokens,
     project_name: &mut String,
     is_editing: &mut bool,
+    status: Option<(&str, bool)>,
 ) -> AppHeaderActions {
     let mut actions = AppHeaderActions::default();
     let height = 52.0;
@@ -1699,6 +1702,11 @@ pub fn app_header(
                     if resp.clicked() {
                         *is_editing = true;
                     }
+                }
+
+                if let Some((label, active)) = status {
+                    ui.add_space(t.space_3);
+                    let _ = chip(ui, t, label, active);
                 }
 
                 // Right side: settings gear.

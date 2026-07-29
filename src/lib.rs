@@ -1,3 +1,9 @@
+#![allow(unknown_lints)]
+// egui's geometry APIs determine these literals as f32 unambiguously. Newer
+// Rust releases warn on that established fallback under `-D warnings`, while
+// Tokito still supports compilers from before the lint existed.
+#![allow(float_literal_f32_fallback)]
+
 //! # tokito_ui
 //!
 //! A small, opinionated component library for [`egui`] 0.29 — the shared

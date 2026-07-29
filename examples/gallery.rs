@@ -241,6 +241,7 @@ impl Gallery {
             t,
             &mut self.header_project_name,
             &mut self.header_editing,
+            Some(("Sync live", true)),
         );
         ui.add_space(2.0);
 
