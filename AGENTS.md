@@ -6,7 +6,7 @@
 
 `tokito_ui` is a small **egui 0.29** component library — the shared design
 layer for the Tokito desktop schematic studio
-([github.com/VtronTokito/tokito](https://github.com/VtronTokito/tokito)).
+([github.com/TokitoAI/tokito](https://github.com/TokitoAI/tokito)).
 
 It is **not a framework**. It is a flat token palette, a theme applier, icon
 helpers, and a handful of composable primitives. Think "the design system,"

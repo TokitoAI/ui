@@ -7,7 +7,7 @@ A small, opinionated UI component library and design system for Rust GUI apps.**
 `tokito_ui` is an **egui 0.29 component library**: a flat colour-token palette,
 a theme applier, icon helpers, and a set of composable widget primitives. It is
 the shared design layer of the
-[Tokito](https://github.com/VtronTokito/tokito) desktop schematic studio, and
+[Tokito](https://github.com/TokitoAI/tokito) desktop schematic studio, and
 drops into any [`egui`](https://github.com/emilk/egui) /
 [`eframe`](https://github.com/emilk/egui/tree/master/crates/eframe)
 application.
@@ -33,7 +33,7 @@ Browse it live: `cargo run --example gallery`.
 
 ```toml
 [dependencies]
-tokito_ui = { git = "https://github.com/VtronTokito/ui" }
+tokito_ui = { git = "https://github.com/TokitoAI/ui" }
 ```
 
 `tokito_ui` pins `egui` **0.29** and `egui-phosphor` **0.7.x**. Bump all three
