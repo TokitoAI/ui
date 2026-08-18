@@ -4,7 +4,7 @@
 buttons, inputs, menus, toggles — plus light/dark theming and Phosphor icons.
 A small, opinionated UI component library and design system for Rust GUI apps.**
 
-`tokito_ui` is an **egui 0.29 component library**: a flat colour-token palette,
+`tokito_ui` is an **egui 0.35 component library**: a flat colour-token palette,
 a theme applier, icon helpers, and a set of composable widget primitives. It is
 the shared design layer of the
 [Tokito](https://github.com/TokitoAI/tokito) desktop schematic studio, and
@@ -36,8 +36,9 @@ Browse it live: `cargo run --example gallery`.
 tokito_ui = { git = "https://github.com/TokitoAI/ui" }
 ```
 
-`tokito_ui` pins `egui` **0.29** and `egui-phosphor` **0.7.x**. Bump all three
-together (egui-phosphor ≥ 0.8 targets egui ≥ 0.30).
+`tokito_ui` pins `egui` **0.35** and `egui-phosphor` **0.13.x**. Bump all three
+together — check crates.io for the `egui-phosphor` release that depends on
+your target `egui` version before bumping either.
 
 ## Setup — once, at startup
 

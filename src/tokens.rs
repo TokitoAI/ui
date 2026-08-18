@@ -285,18 +285,18 @@ impl Tokens {
         }
     }
 
-    /// `radius_md` as an [`egui::Rounding`].
-    pub fn rounding_md(&self) -> egui::Rounding {
-        egui::Rounding::same(self.radius_md)
+    /// `radius_md` as an [`egui::CornerRadius`].
+    pub fn rounding_md(&self) -> egui::CornerRadius {
+        egui::CornerRadius::same(self.radius_md as u8)
     }
 
-    /// `radius_sm` as an [`egui::Rounding`].
-    pub fn rounding_sm(&self) -> egui::Rounding {
-        egui::Rounding::same(self.radius_sm)
+    /// `radius_sm` as an [`egui::CornerRadius`].
+    pub fn rounding_sm(&self) -> egui::CornerRadius {
+        egui::CornerRadius::same(self.radius_sm as u8)
     }
 
-    /// `radius_xs` as an [`egui::Rounding`].
-    pub fn rounding_xs(&self) -> egui::Rounding {
-        egui::Rounding::same(self.radius_xs)
+    /// `radius_xs` as an [`egui::CornerRadius`].
+    pub fn rounding_xs(&self) -> egui::CornerRadius {
+        egui::CornerRadius::same(self.radius_xs as u8)
     }
 }

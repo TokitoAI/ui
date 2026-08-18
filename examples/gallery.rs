@@ -67,21 +67,22 @@ impl Gallery {
 }
 
 impl eframe::App for Gallery {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         let t = if self.dark {
             Tokens::dark()
         } else {
             Tokens::light()
         };
-        tokito_ui::theme::apply(ctx, &t);
+        tokito_ui::theme::apply(&ctx, &t);
 
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::new()
                     .fill(t.bg)
-                    .inner_margin(egui::Margin::same(28.0)),
+                    .inner_margin(egui::Margin::same((28.0) as i8)),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| self.body(ui, &t));
@@ -93,7 +94,7 @@ impl eframe::App for Gallery {
             self.frame += 1;
             ctx.request_repaint();
             if self.frame == 4 {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
             }
             let shot = ctx.input(|i| {
                 i.raw.events.iter().find_map(|e| match e {
@@ -341,9 +342,9 @@ impl Gallery {
                 egui::vec2(380.0, 260.0),
                 egui::Layout::top_down(egui::Align::Min).with_cross_justify(true),
                 |ui| {
-                    egui::Frame::none()
+                    egui::Frame::new()
                         .fill(t.bg)
-                        .inner_margin(egui::Margin::same(8.0))
+                        .inner_margin(egui::Margin::same((8.0) as i8))
                         .show(ui, |ui| {
                             egui::ScrollArea::vertical()
                                 .id_salt("gallery_chat_history")
@@ -428,7 +429,7 @@ impl Gallery {
         });
 
         // Help button (floating bottom-right of the example window).
-        let area_pos = ui.ctx().screen_rect().right_bottom() - egui::vec2(24.0, 24.0);
+        let area_pos = ui.ctx().content_rect().right_bottom() - egui::vec2(24.0, 24.0);
         egui::Area::new(egui::Id::new("gallery_help"))
             .order(egui::Order::Foreground)
             .fixed_pos(area_pos - egui::vec2(32.0, 32.0))
