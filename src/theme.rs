@@ -57,70 +57,80 @@ pub fn apply(ctx: &Context, t: &Tokens) {
     visuals.widgets.noninteractive.bg_fill = t.card;
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, t.text_3);
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, t.border_soft);
-    visuals.widgets.noninteractive.rounding = t.rounding_sm();
+    visuals.widgets.noninteractive.corner_radius = t.rounding_sm();
 
     visuals.widgets.inactive.bg_fill = t.card;
     visuals.widgets.inactive.weak_bg_fill = t.bg_chrome;
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, t.text_2);
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, t.border);
-    visuals.widgets.inactive.rounding = t.rounding_sm();
+    visuals.widgets.inactive.corner_radius = t.rounding_sm();
 
     visuals.widgets.hovered.bg_fill = t.card_hover;
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, t.text);
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, t.border_strong);
-    visuals.widgets.hovered.rounding = t.rounding_sm();
+    visuals.widgets.hovered.corner_radius = t.rounding_sm();
 
     visuals.widgets.active.bg_fill = t.card_hover;
     visuals.widgets.active.fg_stroke = Stroke::new(1.0, t.text);
     visuals.widgets.active.bg_stroke = Stroke::new(1.0, t.accent);
-    visuals.widgets.active.rounding = t.rounding_sm();
+    visuals.widgets.active.corner_radius = t.rounding_sm();
 
     visuals.widgets.open.bg_fill = t.card;
     visuals.widgets.open.bg_stroke = Stroke::new(1.0, t.border_strong);
-    visuals.widgets.open.rounding = t.rounding_sm();
+    visuals.widgets.open.corner_radius = t.rounding_sm();
 
     visuals.selection.bg_fill = t.accent_soft;
     visuals.selection.stroke = Stroke::new(1.0, t.accent);
 
-    visuals.window_rounding = t.rounding_md();
-    visuals.menu_rounding = t.rounding_sm();
+    visuals.window_corner_radius = t.rounding_md();
+    visuals.menu_corner_radius = t.rounding_sm();
     visuals.window_stroke = Stroke::new(1.0, t.border_strong);
     visuals.window_shadow = egui::epaint::Shadow::NONE;
     visuals.popup_shadow = egui::epaint::Shadow::NONE;
 
-    ctx.set_visuals(visuals);
+    // egui 0.34+ keeps separate dark/light `Style`s on the `Context` instead
+    // of one active `Style`. Pin the active theme to what `t` resolved to,
+    // then fully overwrite that theme's style — preserves the pre-0.34
+    // behaviour of `apply()` unconditionally driving the single active style.
+    let theme = if t.dark {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    };
+    ctx.set_theme(theme);
 
-    let mut style = (*ctx.style()).clone();
-    // Named type scale — consume via RichText::text_style(TextStyle::Name(..)).
-    let proportional = |size: f32| FontId::new(size, FontFamily::Proportional);
-    style
-        .text_styles
-        .insert(TextStyle::Heading, proportional(27.0));
-    style
-        .text_styles
-        .insert(TextStyle::Name(Arc::from("h2")), proportional(16.0));
-    style
-        .text_styles
-        .insert(TextStyle::Name(Arc::from("h3")), proportional(13.0));
-    style
-        .text_styles
-        .insert(TextStyle::Body, proportional(14.0));
-    style
-        .text_styles
-        .insert(TextStyle::Button, proportional(13.5));
-    style
-        .text_styles
-        .insert(TextStyle::Small, proportional(12.0));
-    style.text_styles.insert(
-        TextStyle::Monospace,
-        FontId::new(12.0, FontFamily::Monospace),
-    );
+    ctx.style_mut_of(theme, |style| {
+        style.visuals = visuals;
 
-    style.spacing.item_spacing = egui::vec2(t.space_3, t.space_3);
-    style.spacing.button_padding = egui::vec2(t.space_3, t.space_2);
-    style.spacing.window_margin = egui::Margin::same(t.space_2);
-    style.spacing.menu_margin = egui::Margin::same(t.space_2);
-    style.spacing.indent = 18.0;
+        // Named type scale — consume via RichText::text_style(TextStyle::Name(..)).
+        let proportional = |size: f32| FontId::new(size, FontFamily::Proportional);
+        style
+            .text_styles
+            .insert(TextStyle::Heading, proportional(27.0));
+        style
+            .text_styles
+            .insert(TextStyle::Name(Arc::from("h2")), proportional(16.0));
+        style
+            .text_styles
+            .insert(TextStyle::Name(Arc::from("h3")), proportional(13.0));
+        style
+            .text_styles
+            .insert(TextStyle::Body, proportional(14.0));
+        style
+            .text_styles
+            .insert(TextStyle::Button, proportional(13.5));
+        style
+            .text_styles
+            .insert(TextStyle::Small, proportional(12.0));
+        style.text_styles.insert(
+            TextStyle::Monospace,
+            FontId::new(12.0, FontFamily::Monospace),
+        );
 
-    ctx.set_style(style);
+        style.spacing.item_spacing = egui::vec2(t.space_3, t.space_3);
+        style.spacing.button_padding = egui::vec2(t.space_3, t.space_2);
+        style.spacing.window_margin = egui::Margin::same(t.space_2 as i8);
+        style.spacing.menu_margin = egui::Margin::same(t.space_2 as i8);
+        style.spacing.indent = 18.0;
+    });
 }

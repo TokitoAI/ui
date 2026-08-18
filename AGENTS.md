@@ -4,7 +4,7 @@
 
 ## What this is
 
-`tokito_ui` is a small **egui 0.29** component library — the shared design
+`tokito_ui` is a small **egui 0.35** component library — the shared design
 layer for the Tokito desktop schematic studio
 ([github.com/TokitoAI/tokito](https://github.com/TokitoAI/tokito)).
 
@@ -47,12 +47,15 @@ src/
   `FontFamily::Name("phosphor")` so its Private-Use-Area codepoints never
   collide with a text font (Inter Var occupies part of the PUA range).
 - **Stable widget ids.** Anything with internal egui state (`text_input`,
-  `search_field`) takes an explicit `id_source: impl Hash`. Never derive a
-  widget id from layout position — it collides and breaks focus on reflow.
+  `search_field`) takes an explicit `id_source: impl Hash + std::fmt::Debug`
+  (egui 0.35's `Id::new` requires `AsId`, which needs both bounds). Never
+  derive a widget id from layout position — it collides and breaks focus on
+  reflow.
 - **`Tokens` is `#[non_exhaustive]`.** Construct via `Tokens::dark()` /
   `light()` and assign fields to customise; new fields won't be breaking.
-- **Version coupling.** Pin `egui` 0.29 and `egui-phosphor` 0.7.x together
-  (≥ 0.8 targets egui ≥ 0.30). Bumping is a coordinated change.
+- **Version coupling.** Pin `egui` 0.35 and `egui-phosphor` 0.13.x together —
+  check crates.io for the `egui-phosphor` release whose `egui` dependency
+  matches before bumping either. Bumping is a coordinated change.
 
 ## STRICT — this repo is the *only* place UI components are defined
 

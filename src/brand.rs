@@ -58,7 +58,7 @@ pub fn brand_tile(ui: &mut Ui, side: f32) -> Response {
     let painter = ui.painter();
     let tile_fill = Color32::from_rgb(0x07, 0x10, 0x1e);
     let radius = side * 0.235; // matches the Figma's 36 / 150 corner ratio.
-    painter.rect_filled(rect, egui::Rounding::same(radius), tile_fill);
+    painter.rect_filled(rect, egui::CornerRadius::same(radius as u8), tile_fill);
 
     // Inset the mark to ~70 % of the tile, centred. The mark's native
     // aspect is slightly taller than square, so derive the rect from

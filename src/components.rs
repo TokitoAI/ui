@@ -53,7 +53,12 @@ pub fn card(ui: &mut Ui, t: &Tokens, size: Vec2, add_contents: impl FnOnce(&mut 
     let border = lerp_color(t.border, t.border_strong, hv);
     let painter = ui.painter();
     painter.rect_filled(rect, t.rounding_md(), fill);
-    painter.rect_stroke(rect.shrink(0.5), t.rounding_md(), Stroke::new(1.0, border));
+    painter.rect_stroke(
+        rect.shrink(0.5),
+        t.rounding_md(),
+        Stroke::new(1.0, border),
+        egui::StrokeKind::Inside,
+    );
 
     let mut content = ui.new_child(
         UiBuilder::new()
@@ -131,6 +136,7 @@ pub fn icon_button(ui: &mut Ui, t: &Tokens, glyph: &str, side: f32, ink: Color32
             rect.shrink(0.5),
             t.rounding_sm(),
             Stroke::new(1.0, t.border.gamma_multiply(hv)),
+            egui::StrokeKind::Inside,
         );
     }
     ui.painter().text(
@@ -185,8 +191,12 @@ pub fn text_button(
     };
     ui.painter().rect_filled(rect, t.rounding_sm(), fill);
     if let Some(b) = border {
-        ui.painter()
-            .rect_stroke(rect.shrink(0.5), t.rounding_sm(), Stroke::new(1.0, b));
+        ui.painter().rect_stroke(
+            rect.shrink(0.5),
+            t.rounding_sm(),
+            Stroke::new(1.0, b),
+            egui::StrokeKind::Inside,
+        );
     }
     ui.painter()
         .galley(rect.center() - galley.size() / 2.0, galley, ink);
@@ -218,6 +228,7 @@ pub fn badge(ui: &mut Ui, t: &Tokens, text: &str) -> Response {
         rect.shrink(0.5),
         t.rounding_sm(),
         Stroke::new(1.0, t.border),
+        egui::StrokeKind::Inside,
     );
     ui.painter()
         .galley(rect.center() - galley.size() / 2.0, galley, t.text_3);
@@ -237,26 +248,20 @@ pub fn badge(ui: &mut Ui, t: &Tokens, text: &str) -> Response {
 pub fn menu_button(
     ui: &mut Ui,
     t: &Tokens,
-    id_source: impl Hash,
+    id_source: impl Hash + std::fmt::Debug,
     glyph: &str,
     side: f32,
     add_items: impl FnOnce(&mut Ui),
 ) -> Response {
     let trigger = icon_button(ui, t, glyph, side, t.text_2);
     let popup_id = egui::Id::new(id_source);
-    if trigger.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(popup_id));
-    }
-    egui::popup::popup_below_widget(
-        ui,
-        popup_id,
-        &trigger,
-        egui::PopupCloseBehavior::CloseOnClick,
-        |ui| {
+    egui::Popup::from_toggle_button_response(&trigger)
+        .id(popup_id)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
+        .show(|ui| {
             ui.set_min_width(184.0);
             add_items(ui);
-        },
-    );
+        });
     trigger
 }
 
@@ -292,7 +297,7 @@ pub fn list_row(ui: &mut Ui, t: &Tokens, job: egui::text::LayoutJob, selected: b
     if bg.a() > 0 {
         ui.painter().rect_filled(rect, t.rounding_sm(), bg);
     }
-    let galley = ui.fonts(|f| f.layout_job(job));
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
     let pos = pos2(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0);
     ui.painter().galley(pos, galley, t.text);
     response
@@ -307,7 +312,7 @@ pub fn list_row(ui: &mut Ui, t: &Tokens, job: egui::text::LayoutJob, selected: b
 pub fn text_input(
     ui: &mut Ui,
     t: &Tokens,
-    id_source: impl Hash,
+    id_source: impl Hash + std::fmt::Debug,
     value: &mut String,
     hint: &str,
     width: f32,
@@ -331,7 +336,7 @@ pub fn text_input(
 pub fn secret_input(
     ui: &mut Ui,
     t: &Tokens,
-    id_source: impl Hash,
+    id_source: impl Hash + std::fmt::Debug,
     value: &mut String,
     hint: &str,
     width: f32,
@@ -354,7 +359,7 @@ pub fn secret_input(
 pub fn search_field(
     ui: &mut Ui,
     t: &Tokens,
-    id_source: impl Hash,
+    id_source: impl Hash + std::fmt::Debug,
     query: &mut String,
     hint: &str,
     width: f32,
@@ -388,8 +393,12 @@ fn bordered_input(
     let focused = ui.memory(|m| m.has_focus(id));
     let border = if focused { t.accent } else { t.border };
     ui.painter().rect_filled(rect, t.rounding_sm(), t.bg_chrome);
-    ui.painter()
-        .rect_stroke(rect.shrink(0.5), t.rounding_sm(), Stroke::new(1.0, border));
+    ui.painter().rect_stroke(
+        rect.shrink(0.5),
+        t.rounding_sm(),
+        Stroke::new(1.0, border),
+        egui::StrokeKind::Inside,
+    );
     let text_left = if let Some(glyph) = leading_glyph {
         ui.painter().text(
             pos2(rect.left() + 12.0, rect.center().y),
@@ -418,7 +427,7 @@ fn bordered_input(
             // weak text, which in our dark tokens is nearly full-ink and
             // reads as real content.
             .hint_text(egui::RichText::new(hint).color(t.text_3))
-            .frame(false)
+            .frame(egui::Frame::NONE)
             .password(mask)
             .desired_width(edit_rect.width()),
     )
@@ -448,7 +457,7 @@ pub fn toggle(ui: &mut Ui, t: &Tokens, value: &mut bool, label: &str) -> Respons
     let track_rect = Rect::from_min_size(rect.min, track);
     ui.painter().rect_filled(
         track_rect,
-        egui::Rounding::same(track.y / 2.0),
+        egui::CornerRadius::same((track.y / 2.0) as u8),
         lerp_color(t.border_strong, t.accent, on),
     );
     let knob_x = egui::lerp((track_rect.left() + 11.0)..=(track_rect.right() - 11.0), on);
@@ -496,7 +505,7 @@ pub fn modal(
         return;
     }
 
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     // Dimmed backdrop — a full-screen click target that closes the modal.
     let backdrop = egui::Area::new(egui::Id::new(("tokito_ui_modal_backdrop", title)))
         .order(egui::Order::Foreground)
@@ -516,11 +525,11 @@ pub fn modal(
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, -20.0])
         .show(ctx, |ui| {
-            egui::Frame::none()
+            egui::Frame::new()
                 .fill(t.bg_chrome)
                 .stroke(Stroke::new(1.0, t.border_strong))
-                .rounding(t.rounding_md())
-                .inner_margin(egui::Margin::same(t.space_4))
+                .corner_radius(t.rounding_md())
+                .inner_margin(egui::Margin::same((t.space_4) as i8))
                 .show(ui, |ui| {
                     ui.set_width(width);
                     ui.horizontal(|ui| {
@@ -688,6 +697,7 @@ pub fn checkbox(
         box_rect.shrink(0.5),
         t.rounding_xs(),
         Stroke::new(1.0, border),
+        egui::StrokeKind::Inside,
     );
     if on > 0.01 {
         let c = box_rect.center();
@@ -737,6 +747,7 @@ pub fn segmented(
         rect.shrink(0.5),
         t.rounding_sm(),
         Stroke::new(1.0, t.border),
+        egui::StrokeKind::Inside,
     );
 
     let n = options.len().max(1);
@@ -790,14 +801,14 @@ pub fn segmented(
 pub fn select(
     ui: &mut Ui,
     t: &Tokens,
-    id_source: impl Hash,
+    id_source: impl Hash + std::fmt::Debug,
     current: &str,
     width: f32,
     add_options: impl FnOnce(&mut Ui),
 ) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(width, 34.0), Sense::click());
     let popup_id = egui::Id::new(id_source);
-    let open = ui.memory(|m| m.is_popup_open(popup_id));
+    let open = egui::Popup::is_id_open(ui.ctx(), popup_id);
     let hv = hover_t(ui, response.id, response.hovered() || open);
 
     ui.painter().rect_filled(rect, t.rounding_sm(), t.bg_chrome);
@@ -806,8 +817,12 @@ pub fn select(
     } else {
         lerp_color(t.border, t.border_strong, hv)
     };
-    ui.painter()
-        .rect_stroke(rect.shrink(0.5), t.rounding_sm(), Stroke::new(1.0, border));
+    ui.painter().rect_stroke(
+        rect.shrink(0.5),
+        t.rounding_sm(),
+        Stroke::new(1.0, border),
+        egui::StrokeKind::Inside,
+    );
     ui.painter().text(
         pos2(rect.left() + 11.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
@@ -825,19 +840,13 @@ pub fn select(
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    if response.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(popup_id));
-    }
-    egui::popup::popup_below_widget(
-        ui,
-        popup_id,
-        &response,
-        egui::PopupCloseBehavior::CloseOnClick,
-        |ui| {
+    egui::Popup::from_toggle_button_response(&response)
+        .id(popup_id)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
+        .show(|ui| {
             ui.set_min_width(width);
             add_options(ui);
-        },
-    );
+        });
     response
 }
 
@@ -937,6 +946,7 @@ pub fn banner(
         rect.shrink(0.5),
         t.rounding_md(),
         Stroke::new(1.0, accent.gamma_multiply(0.55)),
+        egui::StrokeKind::Inside,
     );
     ui.painter().text(
         pos2(
@@ -964,7 +974,7 @@ pub fn banner(
 pub fn collapsing(
     ui: &mut Ui,
     t: &Tokens,
-    id_source: impl Hash,
+    id_source: impl Hash + std::fmt::Debug,
     label: &str,
     add_body: impl FnOnce(&mut Ui),
 ) {
@@ -1094,7 +1104,7 @@ where
     };
 
     painter.rect_filled(rect, t.rounding_sm(), fill);
-    painter.rect_stroke(rect, t.rounding_sm(), stroke);
+    painter.rect_stroke(rect, t.rounding_sm(), stroke, egui::StrokeKind::Inside);
 
     let ink = if selected {
         t.accent
@@ -1223,7 +1233,7 @@ pub fn sortable_header(
 pub fn data_table<F>(
     ui: &mut Ui,
     t: &Tokens,
-    id_source: impl Hash,
+    id_source: impl Hash + std::fmt::Debug,
     headers: &[&str],
     cols: Vec<egui_extras::Column>,
     state: &mut SortState,
@@ -1474,8 +1484,8 @@ pub fn toast_overlay(ctx: &egui::Context, t: &Tokens, stack: &mut ToastStack) {
                     egui::Frame::popup(ui.style())
                         .fill(t.card)
                         .stroke(Stroke::new(1.0, accent))
-                        .rounding(t.rounding_md())
-                        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+                        .corner_radius(t.rounding_md())
+                        .inner_margin(egui::Margin::symmetric((12.0) as i8, (10.0) as i8))
                         .show(ui, |ui| {
                             ui.set_width(300.0);
                             ui.horizontal(|ui| {
@@ -1528,7 +1538,7 @@ pub fn chip(ui: &mut Ui, t: &Tokens, label: &str, selected: bool) -> bool {
         egui::Button::new(RichText::new(label).size(11.0).color(ink))
             .fill(fill)
             .stroke(Stroke::new(1.0, stroke_color))
-            .rounding(t.rounding_sm())
+            .corner_radius(t.rounding_sm())
             .min_size(vec2(0.0, 28.0)),
     );
     resp.clicked()
@@ -1545,10 +1555,10 @@ pub fn chip(ui: &mut Ui, t: &Tokens, label: &str, selected: bool) -> bool {
 /// size: it grows to fit `add_contents`. Width is whatever the parent layout
 /// gives it. Padding is `space_4` on all sides.
 pub fn content_card(ui: &mut Ui, t: &Tokens, add_contents: impl FnOnce(&mut Ui)) {
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(t.card)
-        .rounding(t.rounding_md())
-        .inner_margin(egui::Margin::same(t.space_4))
+        .corner_radius(t.rounding_md())
+        .inner_margin(egui::Margin::same((t.space_4) as i8))
         .stroke(Stroke::new(1.0, t.border))
         .show(ui, |ui| {
             add_contents(ui);
@@ -1604,10 +1614,10 @@ pub fn list_section_label(ui: &mut Ui, t: &Tokens, label: &str, count: usize) {
 /// (no search results, no items in the list, no recent files). Centred
 /// text, soft card background, no border.
 pub fn empty_state(ui: &mut Ui, t: &Tokens, message: &str) {
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(t.card)
-        .rounding(t.rounding_sm())
-        .inner_margin(egui::Margin::same(14.0))
+        .corner_radius(t.rounding_sm())
+        .inner_margin(egui::Margin::same((14.0) as i8))
         .show(ui, |ui| {
             ui.centered_and_justified(|ui| {
                 ui.label(RichText::new(message).size(12.0).color(t.text_2));
@@ -1653,9 +1663,9 @@ pub fn app_header(
     let mut actions = AppHeaderActions::default();
     let height = 52.0;
 
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(t.bg_chrome)
-        .inner_margin(egui::Margin::symmetric(t.space_3, 0.0))
+        .inner_margin(egui::Margin::symmetric((t.space_3) as i8, (0.0) as i8))
         .show(ui, |ui| {
             ui.set_height(height);
             ui.horizontal_centered(|ui| {
@@ -1684,7 +1694,7 @@ pub fn app_header(
                     let resp = ui.add(
                         egui::TextEdit::singleline(project_name)
                             .desired_width(260.0)
-                            .margin(egui::Margin::symmetric(8.0, 4.0)),
+                            .margin(egui::Margin::symmetric((8.0) as i8, (4.0) as i8)),
                     );
                     if resp.lost_focus() {
                         *is_editing = false;
@@ -1751,10 +1761,13 @@ pub enum TabItem<'a> {
 /// icon + label in muted ink with a subtle hover wash.
 pub fn tab_bar(ui: &mut Ui, t: &Tokens, items: &[TabItem<'_>], selected: usize) -> Option<usize> {
     let mut clicked = None;
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(t.bg_chrome)
         .stroke(Stroke::new(1.0, t.border_soft))
-        .inner_margin(egui::Margin::symmetric(t.space_3, t.space_1))
+        .inner_margin(egui::Margin::symmetric(
+            (t.space_3) as i8,
+            (t.space_1) as i8,
+        ))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = t.space_1;
@@ -1818,6 +1831,7 @@ fn tab_pill(ui: &mut Ui, t: &Tokens, icon: &str, label: &str, selected: bool) ->
             rect.shrink(0.5),
             t.rounding_sm(),
             Stroke::new(1.0, t.accent),
+            egui::StrokeKind::Inside,
         );
     }
 
@@ -1935,10 +1949,10 @@ pub fn chat_bubble(
             BubbleKind::Assistant => t.chat_bubble_bg,
             BubbleKind::User => t.chat_bubble_bg_user,
         };
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(fill)
-            .rounding(t.rounding_sm())
-            .inner_margin(egui::Margin::symmetric(14.0, 12.0))
+            .corner_radius(t.rounding_sm())
+            .inner_margin(egui::Margin::symmetric((14.0) as i8, (12.0) as i8))
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width().min(640.0));
                 body(ui);
@@ -1955,7 +1969,13 @@ pub fn chat_bubble(
 ///
 /// `id_source` scopes child ids so multiple activity bubbles can coexist
 /// without reflow making their animation state fight.
-pub fn chat_activity(ui: &mut Ui, t: &Tokens, id_source: impl Hash, label: &str, detail: &str) {
+pub fn chat_activity(
+    ui: &mut Ui,
+    t: &Tokens,
+    id_source: impl Hash + std::fmt::Debug,
+    label: &str,
+    detail: &str,
+) {
     ui.ctx().request_repaint_after(Duration::from_millis(50));
     ui.push_id(id_source, |ui| {
         chat_bubble(ui, t, BubbleKind::Assistant, "", |ui| {
@@ -2035,11 +2055,14 @@ pub fn chat_composer(
 ) -> Option<ComposerAction> {
     let mut action = None;
 
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(t.card)
         .stroke(Stroke::new(1.0, t.border))
-        .rounding(t.rounding_md())
-        .inner_margin(egui::Margin::symmetric(t.space_3, t.space_2))
+        .corner_radius(t.rounding_md())
+        .inner_margin(egui::Margin::symmetric(
+            (t.space_3) as i8,
+            (t.space_2) as i8,
+        ))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 let send_side = 36.0;
@@ -2047,7 +2070,7 @@ pub fn chat_composer(
                 let resp = ui.add_sized(
                     [composer_w, 0.0],
                     egui::TextEdit::multiline(&mut state.text)
-                        .frame(false)
+                        .frame(egui::Frame::NONE)
                         .desired_rows(1)
                         .hint_text(hint),
                 );
@@ -2205,9 +2228,9 @@ pub fn ai_helper_rail(
 
 fn collapsed_glyph_rail(ui: &mut Ui, t: &Tokens) -> Option<AiHelperRailAction> {
     let mut out = None;
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(t.bg_chrome)
-        .inner_margin(egui::Margin::symmetric(6.0, t.space_3))
+        .inner_margin(egui::Margin::symmetric((6.0) as i8, (t.space_3) as i8))
         .show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 if icon_button(ui, t, icons::ph::SPARKLE, 32.0, t.accent).clicked() {
@@ -2225,10 +2248,10 @@ fn expanded_rail(
     composer: &mut ChatComposerState,
 ) -> Option<AiHelperRailAction> {
     let mut out = None;
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(t.bg_chrome)
         .stroke(Stroke::new(1.0, t.border_soft))
-        .inner_margin(egui::Margin::same(t.space_3))
+        .inner_margin(egui::Margin::same((t.space_3) as i8))
         .show(ui, |ui| {
             // Header — title + collapse + close.
             ui.horizontal(|ui| {
@@ -2289,8 +2312,12 @@ fn rail_suggestion(ui: &mut Ui, t: &Tokens, label: &str) -> Response {
     let fill = lerp_color(t.card, t.card_hover, hv);
     let border = lerp_color(t.border, t.border_strong, hv);
     ui.painter().rect_filled(rect, t.rounding_sm(), fill);
-    ui.painter()
-        .rect_stroke(rect.shrink(0.5), t.rounding_sm(), Stroke::new(1.0, border));
+    ui.painter().rect_stroke(
+        rect.shrink(0.5),
+        t.rounding_sm(),
+        Stroke::new(1.0, border),
+        egui::StrokeKind::Inside,
+    );
     ui.painter().text(
         pos2(rect.left() + 12.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
@@ -2335,6 +2362,7 @@ pub fn thread_row(
             rect.shrink(0.5),
             t.rounding_sm(),
             Stroke::new(1.0, t.accent),
+            egui::StrokeKind::Inside,
         );
     }
 
@@ -2449,10 +2477,10 @@ pub fn conversation_sidebar(
     body: impl FnOnce(&mut Ui),
 ) -> Option<SidebarAction> {
     let mut out = None;
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(t.bg_chrome)
         .stroke(Stroke::new(1.0, t.border_soft))
-        .inner_margin(egui::Margin::same(t.space_2))
+        .inner_margin(egui::Margin::same((t.space_2) as i8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
@@ -2622,10 +2650,10 @@ pub fn suggestion_card(
     let interactive = matches!(status, SuggestionCardStatus::Pending);
     let mut hover_this_frame: Option<usize> = None;
 
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(t.card)
-        .rounding(t.rounding_md())
-        .inner_margin(egui::Margin::same(t.space_4))
+        .corner_radius(t.rounding_md())
+        .inner_margin(egui::Margin::same((t.space_4) as i8))
         .stroke(Stroke::new(1.0, t.border))
         .show(ui, |ui| {
             // Header row: title + status badge on the right.
