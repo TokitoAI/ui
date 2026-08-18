@@ -57,7 +57,7 @@ pub fn card(ui: &mut Ui, t: &Tokens, size: Vec2, add_contents: impl FnOnce(&mut 
         rect.shrink(0.5),
         t.rounding_md(),
         Stroke::new(1.0, border),
-        egui::StrokeKind::Inside,
+        egui::StrokeKind::Outside,
     );
 
     let mut content = ui.new_child(
@@ -136,7 +136,7 @@ pub fn icon_button(ui: &mut Ui, t: &Tokens, glyph: &str, side: f32, ink: Color32
             rect.shrink(0.5),
             t.rounding_sm(),
             Stroke::new(1.0, t.border.gamma_multiply(hv)),
-            egui::StrokeKind::Inside,
+            egui::StrokeKind::Outside,
         );
     }
     ui.painter().text(
@@ -195,7 +195,7 @@ pub fn text_button(
             rect.shrink(0.5),
             t.rounding_sm(),
             Stroke::new(1.0, b),
-            egui::StrokeKind::Inside,
+            egui::StrokeKind::Outside,
         );
     }
     ui.painter()
@@ -228,7 +228,7 @@ pub fn badge(ui: &mut Ui, t: &Tokens, text: &str) -> Response {
         rect.shrink(0.5),
         t.rounding_sm(),
         Stroke::new(1.0, t.border),
-        egui::StrokeKind::Inside,
+        egui::StrokeKind::Outside,
     );
     ui.painter()
         .galley(rect.center() - galley.size() / 2.0, galley, t.text_3);
@@ -397,7 +397,7 @@ fn bordered_input(
         rect.shrink(0.5),
         t.rounding_sm(),
         Stroke::new(1.0, border),
-        egui::StrokeKind::Inside,
+        egui::StrokeKind::Outside,
     );
     let text_left = if let Some(glyph) = leading_glyph {
         ui.painter().text(
@@ -697,7 +697,7 @@ pub fn checkbox(
         box_rect.shrink(0.5),
         t.rounding_xs(),
         Stroke::new(1.0, border),
-        egui::StrokeKind::Inside,
+        egui::StrokeKind::Outside,
     );
     if on > 0.01 {
         let c = box_rect.center();
@@ -747,7 +747,7 @@ pub fn segmented(
         rect.shrink(0.5),
         t.rounding_sm(),
         Stroke::new(1.0, t.border),
-        egui::StrokeKind::Inside,
+        egui::StrokeKind::Outside,
     );
 
     let n = options.len().max(1);
@@ -821,7 +821,7 @@ pub fn select(
         rect.shrink(0.5),
         t.rounding_sm(),
         Stroke::new(1.0, border),
-        egui::StrokeKind::Inside,
+        egui::StrokeKind::Outside,
     );
     ui.painter().text(
         pos2(rect.left() + 11.0, rect.center().y),
@@ -946,7 +946,7 @@ pub fn banner(
         rect.shrink(0.5),
         t.rounding_md(),
         Stroke::new(1.0, accent.gamma_multiply(0.55)),
-        egui::StrokeKind::Inside,
+        egui::StrokeKind::Outside,
     );
     ui.painter().text(
         pos2(
@@ -1104,7 +1104,7 @@ where
     };
 
     painter.rect_filled(rect, t.rounding_sm(), fill);
-    painter.rect_stroke(rect, t.rounding_sm(), stroke, egui::StrokeKind::Inside);
+    painter.rect_stroke(rect, t.rounding_sm(), stroke, egui::StrokeKind::Outside);
 
     let ink = if selected {
         t.accent
@@ -1450,7 +1450,7 @@ impl ToastStack {
 
     fn prune(&mut self) {
         let now = std::time::Instant::now();
-        self.items.retain(|t| t.until.map_or(true, |u| u > now));
+        self.items.retain(|t| t.until.is_none_or(|u| u > now));
     }
 }
 
@@ -1831,7 +1831,7 @@ fn tab_pill(ui: &mut Ui, t: &Tokens, icon: &str, label: &str, selected: bool) ->
             rect.shrink(0.5),
             t.rounding_sm(),
             Stroke::new(1.0, t.accent),
-            egui::StrokeKind::Inside,
+            egui::StrokeKind::Outside,
         );
     }
 
@@ -2209,8 +2209,8 @@ pub enum AiHelperRailAction {
 /// - [`AiHelperRailState::Expanded`] — paints the full rail: header with
 ///   close + collapse, a stack of suggestion chips, and a quick composer.
 ///
-/// The caller is expected to host this in an [`egui::SidePanel::right`] (or
-/// equivalent) and adjust the panel's `exact_width` to match the current
+/// The caller is expected to host this in an [`egui::Panel::right`] (or
+/// equivalent) and adjust the panel's `exact_size` to match the current
 /// state.
 pub fn ai_helper_rail(
     ui: &mut Ui,
@@ -2316,7 +2316,7 @@ fn rail_suggestion(ui: &mut Ui, t: &Tokens, label: &str) -> Response {
         rect.shrink(0.5),
         t.rounding_sm(),
         Stroke::new(1.0, border),
-        egui::StrokeKind::Inside,
+        egui::StrokeKind::Outside,
     );
     ui.painter().text(
         pos2(rect.left() + 12.0, rect.center().y),
@@ -2362,7 +2362,7 @@ pub fn thread_row(
             rect.shrink(0.5),
             t.rounding_sm(),
             Stroke::new(1.0, t.accent),
-            egui::StrokeKind::Inside,
+            egui::StrokeKind::Outside,
         );
     }
 
