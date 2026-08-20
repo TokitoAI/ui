@@ -158,6 +158,39 @@ pub enum ButtonKind {
     Secondary,
 }
 
+/// Fill / ink / border for a [`ButtonKind`] at hover factor `hv`. Shared by
+/// [`text_button`] and [`icon_text_button`] so the two stay visually
+/// identical — only the content laid out inside the rect differs.
+fn button_visuals(t: &Tokens, kind: ButtonKind, hv: f32) -> (Color32, Color32, Option<Color32>) {
+    match kind {
+        ButtonKind::Primary => (
+            lerp_color(t.accent, lighten(t.accent, 0.12), hv),
+            t.accent_ink,
+            None,
+        ),
+        ButtonKind::Secondary => (
+            lerp_color(t.card, t.card_hover, hv),
+            lerp_color(t.text_2, t.text, hv),
+            Some(lerp_color(t.border, t.border_strong, hv)),
+        ),
+    }
+}
+
+/// Paint a button's rounded fill + optional border. Shared tail of
+/// [`text_button`] / [`icon_text_button`] after each lays out its own
+/// content (label-only vs. icon-plus-label).
+fn paint_button_chrome(ui: &Ui, rect: Rect, t: &Tokens, fill: Color32, border: Option<Color32>) {
+    ui.painter().rect_filled(rect, t.rounding_sm(), fill);
+    if let Some(b) = border {
+        ui.painter().rect_stroke(
+            rect.shrink(0.5),
+            t.rounding_sm(),
+            Stroke::new(1.0, b),
+            egui::StrokeKind::Outside,
+        );
+    }
+}
+
 /// A text button. `height` fixes the row height; width fits the label.
 pub fn text_button(
     ui: &mut Ui,
@@ -177,29 +210,54 @@ pub fn text_button(
     let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
     let hv = hover_t(ui, response.id, response.hovered());
 
-    let (fill, ink, border) = match kind {
-        ButtonKind::Primary => (
-            lerp_color(t.accent, lighten(t.accent, 0.12), hv),
-            t.accent_ink,
-            None,
-        ),
-        ButtonKind::Secondary => (
-            lerp_color(t.card, t.card_hover, hv),
-            lerp_color(t.text_2, t.text, hv),
-            Some(lerp_color(t.border, t.border_strong, hv)),
-        ),
-    };
-    ui.painter().rect_filled(rect, t.rounding_sm(), fill);
-    if let Some(b) = border {
-        ui.painter().rect_stroke(
-            rect.shrink(0.5),
-            t.rounding_sm(),
-            Stroke::new(1.0, b),
-            egui::StrokeKind::Outside,
-        );
-    }
+    let (fill, ink, border) = button_visuals(t, kind, hv);
+    paint_button_chrome(ui, rect, t, fill, border);
     ui.painter()
         .galley(rect.center() - galley.size() / 2.0, galley, ink);
+    response
+}
+
+/// A [`text_button`] with a leading Phosphor glyph (`icon`, an
+/// [`icons::ph`] constant). Same visual weights and hover animation as
+/// [`text_button`] — use this when the action reads better with an icon
+/// ("Sign in to Tokito Cloud", "Retry"), and plain `text_button` otherwise.
+pub fn icon_text_button(
+    ui: &mut Ui,
+    t: &Tokens,
+    kind: ButtonKind,
+    icon: &str,
+    label: &str,
+    height: f32,
+) -> Response {
+    let icon_size = height * 0.46;
+    let gap = t.space_2;
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        TextStyle::Button.resolve(ui.style()),
+        Color32::PLACEHOLDER,
+    );
+    let width = icon_size + gap + galley.size().x + t.space_4 * 2.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    let hv = hover_t(ui, response.id, response.hovered());
+
+    let (fill, ink, border) = button_visuals(t, kind, hv);
+    paint_button_chrome(ui, rect, t, fill, border);
+
+    let content_w = icon_size + gap + galley.size().x;
+    let start_x = rect.center().x - content_w / 2.0;
+    let icon_pos = pos2(start_x, rect.center().y);
+    ui.painter().text(
+        icon_pos,
+        egui::Align2::LEFT_CENTER,
+        icon,
+        icons::font(icon_size),
+        ink,
+    );
+    let label_pos = pos2(
+        start_x + icon_size + gap,
+        rect.center().y - galley.size().y / 2.0,
+    );
+    ui.painter().galley(label_pos, galley, ink);
     response
 }
 
@@ -1623,6 +1681,107 @@ pub fn empty_state(ui: &mut Ui, t: &Tokens, message: &str) {
                 ui.label(RichText::new(message).size(12.0).color(t.text_2));
             });
         });
+}
+
+// ---------------------------------------------------------------------------
+// gate_overlay
+// ---------------------------------------------------------------------------
+
+/// A full-bleed gated / locked state: a heavy tinted scrim filling `ui`'s
+/// current available rect, with a centred vertical stack — a rounded
+/// brand-tile visual carrying a small corner badge glyph, a display-weight
+/// heading, one muted subline, and a primary CTA with a leading icon.
+///
+/// egui has no real backdrop blur, so the scrim is approximated with a
+/// high-opacity base fill plus a soft two-layer accent glow behind the
+/// card for depth, rather than a translucent wash over live content —
+/// give this its own `Ui` scoped to exactly the region that should read as
+/// gated (e.g. a `CentralPanel` spanning a message list *and* its
+/// composer), not a thin strip over just part of it.
+///
+/// Generalized on purpose: only the icon, heading, body copy, and button
+/// icon/label are baked in here — what the button *does* is entirely the
+/// caller's concern. Today's only consumer is the chat panel's Tokito
+/// Cloud sign-in gate, but any future gated/empty chrome state (a locked
+/// feature, an unconfigured integration, …) can reuse this unchanged.
+///
+/// Returns `true` on the frame the CTA is clicked.
+#[allow(clippy::too_many_arguments)]
+pub fn gate_overlay(
+    ui: &mut Ui,
+    t: &Tokens,
+    badge_icon: &str,
+    heading: &str,
+    body: &str,
+    button_icon: &str,
+    button_label: &str,
+) -> bool {
+    let rect = ui.available_rect_before_wrap();
+    // Claim the whole area so nothing behind it is clickable while gated.
+    ui.allocate_rect(rect, Sense::hover());
+
+    // Layer 1: a near-opaque base — the closest egui gets to a heavy
+    // backdrop scrim without real blur support.
+    let scrim = if t.dark {
+        t.bg.gamma_multiply(0.97)
+    } else {
+        t.bg
+    };
+    ui.painter().rect_filled(rect, 0.0, scrim);
+
+    // Layer 2: a soft two-ring accent glow centred behind the card, for
+    // depth — flat fills, not a real blur, but reads as intentional rather
+    // than a plain empty-state grey box.
+    let glow_r = (rect.width().min(rect.height()) * 0.42).max(120.0);
+    ui.painter()
+        .circle_filled(rect.center(), glow_r, t.accent_soft);
+    ui.painter()
+        .circle_filled(rect.center(), glow_r * 0.6, t.accent_2_soft);
+
+    let mut clicked = false;
+    ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+        ui.allocate_ui_with_layout(rect.size(), Layout::top_down(Align::Center), |ui| {
+            ui.add_space((rect.height() * 0.5 - 150.0).max(rect.height() * 0.12));
+
+            // Visual: the brand tile with a small lock badge overlapped at
+            // its bottom-right corner (falls back to a plain rounded tile
+            // if the caller ever needs a badge-less variant — not needed
+            // today, so not parameterised yet).
+            let tile_side = 72.0;
+            let tile_resp = crate::brand::brand_tile(ui, tile_side);
+            let badge_d = 30.0;
+            let badge_c = tile_resp.rect.right_bottom() - Vec2::splat(badge_d * 0.32);
+            // Separation ring so the badge reads as sitting *on* the tile
+            // rather than merging into it.
+            ui.painter()
+                .circle_filled(badge_c, badge_d * 0.5 + 3.0, scrim);
+            ui.painter().circle_filled(badge_c, badge_d * 0.5, t.accent);
+            ui.painter().text(
+                badge_c,
+                egui::Align2::CENTER_CENTER,
+                badge_icon,
+                icons::font(badge_d * 0.56),
+                t.accent_ink,
+            );
+
+            ui.add_space(t.space_5);
+            ui.label(
+                RichText::new(heading)
+                    .text_style(TextStyle::Heading)
+                    .strong()
+                    .color(t.text),
+            );
+            ui.add_space(t.space_2);
+            ui.label(RichText::new(body).size(14.0).color(t.text_2));
+            ui.add_space(t.space_5);
+            if icon_text_button(ui, t, ButtonKind::Primary, button_icon, button_label, 38.0)
+                .clicked()
+            {
+                clicked = true;
+            }
+        });
+    });
+    clicked
 }
 
 // ---------------------------------------------------------------------------
