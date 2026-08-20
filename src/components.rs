@@ -1717,8 +1717,12 @@ pub fn gate_overlay(
     button_label: &str,
 ) -> bool {
     let rect = ui.available_rect_before_wrap();
-    // Claim the whole area so nothing behind it is clickable while gated.
-    ui.allocate_rect(rect, Sense::hover());
+    // Claim the whole area as click-and-drag so nothing behind it is
+    // clickable while gated — `Sense::hover()` alone does not intercept
+    // clicks under egui 0.35's hit-testing (a hover-only rect never blocks
+    // a click from reaching whatever egui would otherwise hit at that
+    // position), so it would silently fail to actually gate the area.
+    ui.allocate_rect(rect, Sense::click_and_drag());
 
     // Layer 1: a near-opaque base — the closest egui gets to a heavy
     // backdrop scrim without real blur support.
@@ -1729,14 +1733,25 @@ pub fn gate_overlay(
     };
     ui.painter().rect_filled(rect, 0.0, scrim);
 
-    // Layer 2: a soft two-ring accent glow centred behind the card, for
-    // depth — flat fills, not a real blur, but reads as intentional rather
-    // than a plain empty-state grey box.
+    // Layer 2: a soft accent glow centred behind the card, for depth — not
+    // a real blur, but a multi-step alpha ramp (several concentric fills,
+    // each fainter and larger than the last) reads as a soft falloff
+    // rather than the hard-edged concentric rings a single pair of flat
+    // circles produced. Colour drifts from `accent` at the rim to
+    // `accent_2` at the core so the glow itself carries the two-tone brand
+    // gradient instead of a flat wash.
     let glow_r = (rect.width().min(rect.height()) * 0.42).max(120.0);
-    ui.painter()
-        .circle_filled(rect.center(), glow_r, t.accent_soft);
-    ui.painter()
-        .circle_filled(rect.center(), glow_r * 0.6, t.accent_2_soft);
+    const GLOW_STEPS: usize = 7;
+    for step in 0..GLOW_STEPS {
+        // `f` sweeps 0.0 (outermost, faintest) .. 1.0 (innermost, most
+        // saturated) — painted in that order so each smaller, stronger
+        // ring layers on top of the softer ones behind it.
+        let f = step as f32 / (GLOW_STEPS - 1) as f32;
+        let r = glow_r * (1.0 - f * 0.8);
+        let colour = lerp_color(t.accent_soft, t.accent_2_soft, f);
+        let step_colour = colour.gamma_multiply(0.3 + 0.7 * f);
+        ui.painter().circle_filled(rect.center(), r, step_colour);
+    }
 
     let mut clicked = false;
     ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
