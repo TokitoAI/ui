@@ -106,6 +106,7 @@ All live in `tokito_ui::components` (aliased `c` above). Each takes
 | `new_tile` | `new_tile(ui, t, label, sublabel, size) -> Response` | A dashed "create new …" tile. |
 | `icon_button` | `icon_button(ui, t, glyph, side) -> Response` | A square, frameless icon button. |
 | `text_button` | `text_button(ui, t, kind, label, height) -> Response` | A text button — `ButtonKind::Primary` / `Secondary`. |
+| `icon_text_button` | `icon_text_button(ui, t, kind, icon, label, height) -> Response` | `text_button` with a leading Phosphor glyph. |
 | `link` | `link(ui, t, label) -> Response` | An inline accent-coloured text link. |
 | `badge` | `badge(ui, t, text) -> Response` | A small bordered count / status pill. |
 | `list_row` | `list_row(ui, t, job, selected) -> Response` | A full-width, left-aligned, hover-highlighted row. |
@@ -133,6 +134,7 @@ All live in `tokito_ui::components` (aliased `c` above). Each takes
 | `inspector_row` | `inspector_row(ui, t, label, value)` | Label-on-left, value-on-right key/value row for inspector / property panels. |
 | `list_section_label` | `list_section_label(ui, t, label, count)` | "Symbols (24)" style group label for dense side-panel lists. |
 | `empty_state` | `empty_state(ui, t, message)` | Centred "nothing here" placeholder card. |
+| `gate_overlay` | `gate_overlay(ui, t, badge_icon, heading, body, button_icon, button_label) -> bool` | Full-bleed gated/locked state — heavy scrim, brand tile + corner badge, display heading, subline, primary CTA. Returns `true` when the CTA is clicked. |
 | `chat_activity` | `chat_activity(ui, t, id_source, label, detail)` | Assistant loading/activity bubble with subtle dots and status copy for slow background work. |
 
 ### Icons

@@ -25,13 +25,14 @@ src/
 ```
 
 **Components** (`components.rs`): `card`, `new_tile`, `icon_button`,
-`text_button`, `link`, `badge`, `menu_button`, `menu_item`, `list_row`,
-`text_input`, `search_field`, `secret_input`, `toggle`, `modal`,
+`text_button`, `icon_text_button`, `link`, `badge`, `menu_button`, `menu_item`,
+`list_row`, `text_input`, `search_field`, `secret_input`, `toggle`, `modal`,
 `page_header`, `section_header`, `nav_item`, `checkbox`, `segmented`,
 `select`, `select_option`, `banner`, `collapsing`, `cad_tool_button`
 (+ `paint_phosphor_glyph`), `data_table` (+ `SortState`,
 `sortable_header`), `toast_overlay` (+ `ToastStack`), `chip`,
-`content_card`, `inspector_row`, `list_section_label`, `empty_state`.
+`content_card`, `inspector_row`, `list_section_label`, `empty_state`,
+`gate_overlay`.
 
 ## Rules — keep these true
 
