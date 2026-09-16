@@ -1,0 +1,19 @@
+# Buildkite equivalent of .github/workflows/ci.yml.
+#
+# Every command is a path to a script in this repository, never an inline
+# command: the agents run with no-command-eval=true, which refuses anything
+# else. See tokito-infra docs/plans/01-self-hosted-ci.md.
+
+env:
+  # The pinned CI image, built from tokito-infra/ci/runner/Dockerfile. Its Rust
+  # version must match rust-toolchain.toml — if they drift, rustup honours the
+  # repo's file and downloads a second toolchain at job time, which is the exact
+  # failure the image exists to prevent.
+  CI_IMAGE: "tokito-ci-linux:1.96.0"
+
+agents:
+  queue: "${TOKITO_CI_QUEUE:-linux}"
+
+steps:
+  - label: ":rust: ci"
+    command: .buildkite/steps/ci.sh
