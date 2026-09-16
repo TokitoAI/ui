@@ -29,8 +29,6 @@ docker_args=(
   --user 0:0
   --volume "$PWD:/work"
   --workdir /work
-  --env CARGO_TERM_COLOR=always
-  --env RUST_BACKTRACE=1
 )
 
 # Persist the cargo registry and the target directory across jobs. Without this
@@ -53,15 +51,36 @@ if [ -x /usr/local/bin/tokito-gh-token ]; then
 fi
 
 exec docker run "${docker_args[@]}" "$CI_IMAGE" bash -euo pipefail -c '
-  # The checkout is owned by the host user; git refuses to operate on a repo it
-  # thinks belongs to someone else.
-  git config --global --add safe.directory /work
+  # The container starts as root for the reason above, then drops to an
+  # unprivileged uid for the build itself — because PostgreSQL refuses to run
+  # as uid 0, and pg-embed starts one for the DB integration tests:
+  #
+  #   embedded PostgreSQL failed after retries
+  #   Caused by: PostgreSQL could not be initialized.
+  #
+  # So: root sets up ownership on the cache volumes, then hands off. Everything
+  # the build writes goes to those volumes or /tmp, never into the bind-mounted
+  # checkout, so the host copy stays owned by the agent user.
+  BUILD_UID=5000
+  useradd -m -u "$BUILD_UID" build 2>/dev/null || true
+  chown -R "$BUILD_UID" /work/target /usr/local/cargo/registry /usr/local/cargo/git 2>/dev/null || true
+
+  # --system, not --global: the build runs as a different user than the one
+  # writing this config, so it has to land somewhere both can read.
+  git config --system --add safe.directory /work
 
   if [ -n "${GH_TOKEN:-}" ]; then
-    git config --global \
+    git config --system \
       url."https://x-access-token:${GH_TOKEN}@github.com/TokitoAI/".insteadOf \
       "https://github.com/TokitoAI/"
   fi
 
-  exec just "$@"
+  exec setpriv --reuid="$BUILD_UID" --regid="$BUILD_UID" --clear-groups \
+    env HOME=/home/build \
+        PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        CARGO_HOME=/usr/local/cargo \
+        RUSTUP_HOME=/usr/local/rustup \
+        CARGO_TERM_COLOR=always \
+        RUST_BACKTRACE=1 \
+    just "$@"
 ' bash "$recipe" "$@"
