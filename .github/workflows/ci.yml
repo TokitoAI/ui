@@ -12,10 +12,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
+  # The heavy work now lives on Buildkite (.buildkite/pipeline.yml). This stays
+  # as the pull-request status check, and calls the same justfile recipes, so
+  # the two cannot drift.
   check:
     runs-on: [self-hosted, Linux, X64, tokito-vps, private-build]
     steps:
@@ -27,22 +27,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libgtk-3-dev
 
-      - uses: dtolnay/rust-toolchain@87eb139fed4b08a67bd1fa429a21d1f5d523e03e # 1.92.0
-        with:
-          components: rustfmt, clippy
+      # No version here on purpose: rust-toolchain.toml pins the version and
+      # rustup honours it over anything this step installs. The old "# 1.92.0"
+      # pin was decorative for exactly that reason.
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
-      - name: Format
-        run: cargo fmt --all -- --check
+      - name: Install just
+        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2
+        with:
+          tool: just
 
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Build
-        run: cargo build
-
-      - name: Docs
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps
+      # Build logic lives in the justfile, not here.
+      - run: just ci
