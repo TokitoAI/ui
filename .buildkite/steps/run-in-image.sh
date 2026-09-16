@@ -63,6 +63,23 @@ exec docker run "${docker_args[@]}" "$CI_IMAGE" bash -euo pipefail -c '
   # checkout, so the host copy stays owned by the agent user.
   BUILD_UID=5000
   useradd -m -u "$BUILD_UID" build 2>/dev/null || true
+
+  # Some repos (ui) deliberately gitignore Cargo.lock, the usual library
+  # convention. Cargo then wants to create one beside Cargo.toml — inside the
+  # bind-mounted checkout, which the unprivileged build user cannot write:
+  #
+  #   failed to create file `Cargo.lock`: Permission denied (os error 13)
+  #
+  # Generating it here, while still root, leaves it owned by the host agent user
+  # and up to date, so the build only ever reads it.
+  #
+  # This is a workaround for a missing lockfile, not a substitute for one: it
+  # resolves dependencies afresh each run, so those builds are not reproducible.
+  # Committing Cargo.lock would fix that properly.
+  if [ -f /work/Cargo.toml ] && [ ! -f /work/Cargo.lock ]; then
+    cargo generate-lockfile --manifest-path /work/Cargo.toml
+  fi
+
   chown -R "$BUILD_UID" /work/target /usr/local/cargo/registry /usr/local/cargo/git 2>/dev/null || true
 
   # --system, not --global: the build runs as a different user than the one
