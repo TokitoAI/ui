@@ -41,6 +41,26 @@ docker_args+=(
   --volume "tokito-target-${BUILDKITE_PIPELINE_SLUG:-local}:/work/target"
 )
 
+# Optional: join a user-defined Docker network, for steps that need a service
+# container (tokito-api's test suite needs PostgreSQL).
+#
+# This is deliberately NOT `--network host`. Host networking would put the build
+# container on the host's loopback, where Infisical (127.0.0.1:8080) and
+# Windmill (127.0.0.1:8000) are listening — and "those bind to loopback on the
+# host, unreachable from a container" is the entire isolation argument for
+# co-locating the build agent with the secrets stack. A user-defined network
+# reaches the service by container name and reaches nothing else.
+if [ -n "${CI_NETWORK:-}" ]; then
+  docker_args+=(--network "$CI_NETWORK")
+fi
+
+# Optional: forward named environment variables into the container, for things
+# like a service container's connection URL. Names only — values come from the
+# caller's environment, so they never appear in a process listing.
+for _var in ${CI_PASS_ENV:-}; do
+  docker_args+=(--env "$_var")
+done
+
 # Private TokitoAI git dependencies (ui, catalog, schematic-core) need a
 # credential. Mint a one-hour GitHub App installation token rather than baking
 # in a long-lived PAT — this is what replaces VTRON_DEPS_TOKEN.
