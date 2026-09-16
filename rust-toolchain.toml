@@ -1,3 +1,13 @@
+# Pinned deliberately, not set to "stable".
+#
+# rustup honours this file over whatever a CI step installs, so while this said
+# "stable" the version pin in the CI workflow did nothing and every build ran on
+# whatever stable happened to be that day. A new stable release could therefore
+# turn CI red on a pull request that changed nothing, because `clippy -D
+# warnings` picks up new lints.
+#
+# Bumping this is a deliberate, reviewable change. Keep it in step with the
+# Buildkite runner image (tokito-infra) and with the other TokitoAI repos.
 [toolchain]
-channel = "stable"
+channel = "1.96.0"
 components = ["rustfmt", "clippy"]
