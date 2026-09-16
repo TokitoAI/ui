@@ -30,24 +30,26 @@ fmt-check:
 fmt:
     cargo fmt --all
 
-# `--locked` matters here: without it clippy will quietly update Cargo.lock, and
-# a later `--locked` command then passes against the rewritten lock, so a
-# dependency drift lands with nothing failing.
+# No `--locked` here, unlike the other repos. This crate deliberately does not
+# commit Cargo.lock — .gitignore lists it, the usual library convention — so
+# there is nothing to lock against, and a fresh CI checkout fails outright with
+# "cannot create the lock file because --locked was passed". The flag only
+# buys something once a lockfile is committed.
 # Lints, denying warnings.
 clippy:
-    cargo clippy --locked --all-targets -- -D warnings
+    cargo clippy --all-targets -- -D warnings
 
 # Replaces the workflow's bare `cargo build`: this compiles the same code and
 # then actually runs something with it.
 # Test suite.
 test:
-    cargo test --locked
+    cargo test
 
 # Broken intra-doc links are errors here, not warnings.
 # Documentation builds clean.
 doc:
-    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 
-# Lockfile and crate resolve without changes. Fast local inner loop only.
+# Crate resolves. Fast local inner loop only.
 check:
-    cargo check --locked
+    cargo check
