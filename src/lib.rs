@@ -6,7 +6,7 @@
 
 //! # tokito_ui
 //!
-//! A small, opinionated component library for [`egui`] 0.29 — the shared
+//! A small, opinionated component library for [`egui`] 0.35 — the shared
 //! design layer for the Tokito desktop app.
 //!
 //! It is deliberately not a full framework. It provides:
