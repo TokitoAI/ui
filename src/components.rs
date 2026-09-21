@@ -955,7 +955,7 @@ pub enum BannerKind {
     Info,
 }
 
-/// Interaction result from [`status_overlay`].
+/// Interaction result from [`status_card`] and [`status_overlay`].
 pub struct StatusOverlayResponse<R> {
     /// Value returned by the caller's content closure.
     pub inner: R,
@@ -963,6 +963,26 @@ pub struct StatusOverlayResponse<R> {
     pub action_clicked: bool,
     /// The user dismissed the overlay with its close button.
     pub dismissed: bool,
+}
+
+/// A compact, dismissible status card that participates in its parent's
+/// layout.
+///
+/// Use this for persistent workspace state that has a natural home in a side
+/// rail or panel. Unlike [`status_overlay`], it never creates a foreground
+/// layer, so it cannot cover adjacent controls. Domain content is supplied by
+/// `add_contents`; the component owns the surface, header, optional action,
+/// and close affordance.
+pub fn status_card<R>(
+    ui: &mut Ui,
+    t: &Tokens,
+    kind: BannerKind,
+    glyph: &str,
+    title: &str,
+    action_label: Option<&str>,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> StatusOverlayResponse<R> {
+    status_card_frame(ui, t, kind, glyph, title, action_label, false, add_contents)
 }
 
 /// A compact, dismissible floating status panel.
@@ -984,6 +1004,39 @@ pub fn status_overlay<R>(
     action_label: Option<&str>,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> StatusOverlayResponse<R> {
+    let mut inner = None;
+
+    egui::Area::new(egui::Id::new(id_source))
+        .anchor(egui::Align2::RIGHT_TOP, anchor_offset)
+        .order(egui::Order::Foreground)
+        .interactable(true)
+        .show(ctx, |ui| {
+            ui.set_width(width);
+            inner = Some(status_card_frame(
+                ui,
+                t,
+                kind,
+                glyph,
+                title,
+                action_label,
+                true,
+                add_contents,
+            ));
+        });
+
+    inner.expect("status overlay content is always rendered")
+}
+
+fn status_card_frame<R>(
+    ui: &mut Ui,
+    t: &Tokens,
+    kind: BannerKind,
+    glyph: &str,
+    title: &str,
+    action_label: Option<&str>,
+    floating: bool,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> StatusOverlayResponse<R> {
     let accent = match kind {
         BannerKind::Success => t.success,
         BannerKind::Danger => t.danger,
@@ -992,50 +1045,45 @@ pub fn status_overlay<R>(
     };
     let mut dismissed = false;
     let mut action_clicked = false;
-    let mut inner = None;
-
-    egui::Area::new(egui::Id::new(id_source))
-        .anchor(egui::Align2::RIGHT_TOP, anchor_offset)
-        .order(egui::Order::Foreground)
-        .interactable(true)
-        .show(ctx, |ui| {
-            egui::Frame::new()
-                .fill(t.card)
-                .stroke(Stroke::new(1.0, t.border))
-                .inner_margin(egui::Margin::symmetric(12, 10))
-                .corner_radius(t.rounding_md())
-                .shadow(egui::epaint::Shadow {
-                    offset: [0, 4],
-                    blur: 12,
-                    spread: 0,
-                    color: Color32::from_black_alpha(60),
-                })
-                .show(ui, |ui| {
-                    ui.set_width(width);
-                    ui.horizontal(|ui| {
-                        ui.label(icons::icon(glyph, 14.0, accent));
-                        ui.label(RichText::new(title).strong().color(t.text));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if icon_button(ui, t, icons::ph::X, 22.0, t.text_2)
-                                .on_hover_text("Dismiss")
-                                .clicked()
-                            {
-                                dismissed = true;
-                            }
-                            if let Some(label) = action_label {
-                                action_clicked =
-                                    text_button(ui, t, ButtonKind::Secondary, label, 22.0)
-                                        .clicked();
-                            }
-                        });
-                    });
-                    ui.add_space(6.0);
-                    inner = Some(add_contents(ui));
+    let shadow = if floating {
+        egui::epaint::Shadow {
+            offset: [0, 4],
+            blur: 12,
+            spread: 0,
+            color: Color32::from_black_alpha(60),
+        }
+    } else {
+        egui::epaint::Shadow::NONE
+    };
+    let response = egui::Frame::new()
+        .fill(t.card)
+        .stroke(Stroke::new(1.0, t.border))
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .corner_radius(t.rounding_md())
+        .shadow(shadow)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(icons::icon(glyph, 14.0, accent));
+                ui.label(RichText::new(title).strong().color(t.text));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if icon_button(ui, t, icons::ph::X, 22.0, t.text_2)
+                        .on_hover_text("Dismiss")
+                        .clicked()
+                    {
+                        dismissed = true;
+                    }
+                    if let Some(label) = action_label {
+                        action_clicked =
+                            text_button(ui, t, ButtonKind::Secondary, label, 22.0).clicked();
+                    }
                 });
+            });
+            ui.add_space(6.0);
+            add_contents(ui)
         });
 
     StatusOverlayResponse {
-        inner: inner.expect("status overlay content is always rendered"),
+        inner: response.inner,
         action_clicked,
         dismissed,
     }
