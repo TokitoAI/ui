@@ -955,6 +955,92 @@ pub enum BannerKind {
     Info,
 }
 
+/// Interaction result from [`status_overlay`].
+pub struct StatusOverlayResponse<R> {
+    /// Value returned by the caller's content closure.
+    pub inner: R,
+    /// The user activated the optional header action.
+    pub action_clicked: bool,
+    /// The user dismissed the overlay with its close button.
+    pub dismissed: bool,
+}
+
+/// A compact, dismissible floating status panel.
+///
+/// This is the shared primitive for contextual summaries that must sit above
+/// a workspace without becoming an undismissable obstruction. Domain content
+/// is supplied by `add_contents`; the component owns the surface, header,
+/// optional action and close affordance. Consumers should remember dismissal
+/// state and provide another discoverable route back to the same information.
+pub fn status_overlay<R>(
+    ctx: &egui::Context,
+    t: &Tokens,
+    id_source: impl Hash + std::fmt::Debug,
+    anchor_offset: Vec2,
+    width: f32,
+    kind: BannerKind,
+    glyph: &str,
+    title: &str,
+    action_label: Option<&str>,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> StatusOverlayResponse<R> {
+    let accent = match kind {
+        BannerKind::Success => t.success,
+        BannerKind::Danger => t.danger,
+        BannerKind::Warning => t.warning,
+        BannerKind::Info => t.text_2,
+    };
+    let mut dismissed = false;
+    let mut action_clicked = false;
+    let mut inner = None;
+
+    egui::Area::new(egui::Id::new(id_source))
+        .anchor(egui::Align2::RIGHT_TOP, anchor_offset)
+        .order(egui::Order::Foreground)
+        .interactable(true)
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(t.card)
+                .stroke(Stroke::new(1.0, t.border))
+                .inner_margin(egui::Margin::symmetric(12, 10))
+                .corner_radius(t.rounding_md())
+                .shadow(egui::epaint::Shadow {
+                    offset: [0, 4],
+                    blur: 12,
+                    spread: 0,
+                    color: Color32::from_black_alpha(60),
+                })
+                .show(ui, |ui| {
+                    ui.set_width(width);
+                    ui.horizontal(|ui| {
+                        ui.label(icons::icon(glyph, 14.0, accent));
+                        ui.label(RichText::new(title).strong().color(t.text));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if icon_button(ui, t, icons::ph::X, 22.0, t.text_2)
+                                .on_hover_text("Dismiss")
+                                .clicked()
+                            {
+                                dismissed = true;
+                            }
+                            if let Some(label) = action_label {
+                                action_clicked =
+                                    text_button(ui, t, ButtonKind::Secondary, label, 22.0)
+                                        .clicked();
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
+                    inner = Some(add_contents(ui));
+                });
+        });
+
+    StatusOverlayResponse {
+        inner: inner.expect("status overlay content is always rendered"),
+        action_clicked,
+        dismissed,
+    }
+}
+
 /// A full-width status callout: a leading icon, a bold `title`, and a wrapped
 /// muted `body` line, on a tinted panel.
 ///

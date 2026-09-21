@@ -125,6 +125,7 @@ All live in `tokito_ui::components` (aliased `c` above). Each takes
 | `select` | `select(ui, t, id_source, current, width, \|ui\| …) -> Response` | A dropdown — trigger box + popup of `select_option`s. |
 | `select_option` | `select_option(ui, t, label, selected) -> bool` | One option row inside a `select` popup. |
 | `banner` | `banner(ui, t, kind, glyph, title, body) -> Response` | A status callout — `BannerKind::Success` / `Danger` / `Warning` / `Info`. |
+| `status_overlay` | `status_overlay(ctx, t, id, offset, width, kind, glyph, title, action, \|ui\| …)` | A compact floating status panel with an optional header action and an always-visible dismiss button. |
 | `collapsing` | `collapsing(ui, t, id_source, label, \|ui\| …)` | A collapsible "Advanced options" disclosure section. |
 | `cad_tool_button` + `paint_phosphor_glyph` | `cad_tool_button(ui, t, side, selected, tooltip, \|p, r, ink\| …)` | A square, toggleable CAD tool-rail button. Caller paints the icon via the closure — pass `paint_phosphor_glyph(GLYPH)` for Phosphor, or paint hand-drawn schematic strokes. |
 | `data_table` + `sortable_header` | `data_table(ui, t, id, headers, cols, &mut SortState, n, h, \|row, i\| …)` | A scrollable [`egui_extras::TableBuilder`] table with click-to-sort column headers. |
