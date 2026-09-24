@@ -64,6 +64,8 @@ pub struct Tokens {
     pub danger: Color32,
     /// Warning / caution.
     pub warning: Color32,
+    /// Translucent warning wash — rows / surfaces that need attention.
+    pub warning_soft: Color32,
     /// Success / positive.
     pub success: Color32,
 
@@ -174,6 +176,7 @@ impl Tokens {
             accent_2_soft: Color32::from_rgba_unmultiplied(0x54, 0x56, 0xf0, 0x29),
             danger: Color32::from_rgb(0xef, 0x5c, 0x68),
             warning: Color32::from_rgb(0xe0, 0xa4, 0x3f),
+            warning_soft: Color32::from_rgba_unmultiplied(0xe0, 0xa4, 0x3f, 0x0c),
             success: Color32::from_rgb(0x3e, 0xcf, 0x8e),
             radius_xs: 4.0,
             radius_sm: 7.0,
@@ -236,6 +239,7 @@ impl Tokens {
             accent_2_soft: Color32::from_rgba_unmultiplied(0x54, 0x56, 0xf0, 0x1f),
             danger: Color32::from_rgb(0xcf, 0x43, 0x4c),
             warning: Color32::from_rgb(0xb8, 0x7a, 0x18),
+            warning_soft: Color32::from_rgba_unmultiplied(0xe0, 0xa4, 0x3f, 0x16),
             success: Color32::from_rgb(0x1a, 0x9d, 0x6a),
             radius_xs: 4.0,
             radius_sm: 7.0,
