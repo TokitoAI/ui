@@ -32,7 +32,9 @@ src/
 (+ `paint_phosphor_glyph`), `data_table` (+ `SortState`,
 `sortable_header`), `toast_overlay` (+ `ToastStack`), `chip`,
 `content_card`, `inspector_row`, `list_section_label`, `empty_state`,
-`gate_overlay`.
+`gate_overlay`, `status_badge`, `skeleton`, `spinner`, `number_input`,
+`result_row`, `action_banner`, `empty_panel`; `data_table` takes `DataColumn`
+descriptors (label, width, numeric alignment, sortable).
 
 ## Rules — keep these true
 
