@@ -32,7 +32,14 @@ src/
 (+ `paint_phosphor_glyph`), `data_table` (+ `SortState`,
 `sortable_header`), `toast_overlay` (+ `ToastStack`), `chip`,
 `content_card`, `inspector_row`, `list_section_label`, `empty_state`,
-`gate_overlay`.
+`gate_overlay`, `status_badge`, `skeleton`, `spinner`, `number_input`,
+`result_row`, `action_banner`, `empty_panel`, `status_dot`, `accent_badge`,
+`cell_text` (+ `CellText`), `caption_label`, `filter_chip`, `side_sheet`,
+`label_tile`, `stat_tile`, `flush_card`, `tab_header`; `data_table` is a
+self-laid-out grid taking `DataColumn` descriptors (label,
+`ColumnWidth::{Fixed,Flex}`, numeric alignment, sortable) and `DataTable`
+options (row tones, selection, framed/unframed, scroll, footer), returning
+the clicked row.
 
 ## Rules — keep these true
 
