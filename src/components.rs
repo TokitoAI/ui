@@ -943,7 +943,7 @@ pub fn select_option(ui: &mut Ui, t: &Tokens, label: &str, selected: bool) -> bo
 // ---------------------------------------------------------------------------
 
 /// Visual tone of a [`banner`] — picks its accent colour.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BannerKind {
     /// Positive / ready state — the `success` colour.
     Success,
@@ -1412,12 +1412,58 @@ pub fn sortable_header(
     clicked
 }
 
-/// A scrollable table with [`sortable_header`]-driven sortable columns.
+/// One column of a [`data_table`]: header label, width policy, alignment,
+/// and whether clicking the header sorts by it.
+#[derive(Clone, Copy)]
+pub struct DataColumn<'a> {
+    /// Header text. Empty for an unlabeled column (a trailing row-menu slot).
+    pub label: &'a str,
+    /// Width policy — an [`egui_extras::Column`] (`exact`, `auto`,
+    /// `remainder`, `initial(..).at_least(..)` …).
+    pub width: egui_extras::Column,
+    /// Right-align the header (numeric columns: price, quantity, stock).
+    /// Cells align themselves; right-align them with
+    /// `ui.with_layout(Layout::right_to_left(Align::Center), ..)`.
+    pub numeric: bool,
+    /// Clicking the header drives the table's [`SortState`].
+    pub sortable: bool,
+}
+
+impl<'a> DataColumn<'a> {
+    /// A sortable, left-aligned column.
+    pub fn new(label: &'a str, width: egui_extras::Column) -> Self {
+        Self {
+            label,
+            width,
+            numeric: false,
+            sortable: true,
+        }
+    }
+
+    /// A sortable, right-aligned (numeric) column.
+    pub fn numeric(label: &'a str, width: egui_extras::Column) -> Self {
+        Self {
+            numeric: true,
+            ..Self::new(label, width)
+        }
+    }
+
+    /// Mark this column as not sortable (header renders as a plain caption).
+    pub fn unsorted(mut self) -> Self {
+        self.sortable = false;
+        self
+    }
+}
+
+/// A full-width, scrollable table with [`sortable_header`]-driven sortable
+/// columns and a hover highlight per row.
 ///
 /// `id_source` salts the inner scroll area's id so multiple tables on one
-/// screen don't collide. `headers` is one label per column. `row_height` is
-/// the per-row height for [`egui_extras::TableBuilder`]. `cols` describes the
-/// column widths — pass [`egui_extras::Column`] values.
+/// screen don't collide. `columns` describes each column (see
+/// [`DataColumn`]). `row_height` is the per-row height for
+/// [`egui_extras::TableBuilder`] (use ~44 for two-line cells). The table
+/// fills the available width and height; reserve space for a footer by
+/// laying it out first in a `bottom_up` layout.
 ///
 /// The `build_row` closure paints one cell per column for a given row index.
 /// Callers usually pre-sort their data by `state` *before* calling this, then
@@ -1426,8 +1472,7 @@ pub fn data_table<F>(
     ui: &mut Ui,
     t: &Tokens,
     id_source: impl Hash + std::fmt::Debug,
-    headers: &[&str],
-    cols: Vec<egui_extras::Column>,
+    columns: &[DataColumn<'_>],
     state: &mut SortState,
     row_count: usize,
     row_height: f32,
@@ -1436,19 +1481,37 @@ pub fn data_table<F>(
     F: FnMut(&mut egui_extras::TableRow<'_, '_>, usize),
 {
     let id = ui.make_persistent_id(id_source);
+    let max_h = ui.available_height();
     let mut builder = egui_extras::TableBuilder::new(ui)
         .id_salt(id)
         .striped(true)
         .resizable(false)
+        .sense(Sense::hover())
+        .auto_shrink([false, false])
+        .max_scroll_height(max_h)
         .cell_layout(Layout::left_to_right(Align::Center));
-    for c in cols {
-        builder = builder.column(c);
+    for c in columns {
+        builder = builder.column(c.width);
     }
     builder
-        .header(22.0, |mut header| {
-            for (col, label) in headers.iter().enumerate() {
+        .header(28.0, |mut header| {
+            for (col, c) in columns.iter().enumerate() {
                 header.col(|ui| {
-                    sortable_header(ui, t, label, col, state);
+                    let layout = if c.numeric {
+                        Layout::right_to_left(Align::Center)
+                    } else {
+                        Layout::left_to_right(Align::Center)
+                    };
+                    ui.with_layout(layout, |ui| {
+                        if c.label.is_empty() {
+                            return;
+                        }
+                        if c.sortable {
+                            sortable_header(ui, t, c.label, col, state);
+                        } else {
+                            ui.label(RichText::new(c.label).strong().color(t.text_2));
+                        }
+                    });
                 });
             }
         })
@@ -3254,4 +3317,396 @@ fn suggestion_status_badge(ui: &mut Ui, t: &Tokens, status: &SuggestionCardStatu
         _ => label.to_string(),
     };
     badge(ui, t, &text);
+}
+
+// ---------------------------------------------------------------------------
+// data display: status badge, skeleton, spinner, number input, result row,
+// action banner, empty panel
+// ---------------------------------------------------------------------------
+
+/// The accent colour a [`BannerKind`] maps to — shared by the tone-aware
+/// data-display primitives below.
+fn kind_accent(t: &Tokens, kind: BannerKind) -> Color32 {
+    match kind {
+        BannerKind::Success => t.success,
+        BannerKind::Danger => t.danger,
+        BannerKind::Warning => t.warning,
+        BannerKind::Info => t.text_2,
+    }
+}
+
+/// A tone-tinted status pill: an optional leading [`icons::ph`] glyph and a
+/// short label, filled with a soft wash of the [`BannerKind`] accent and
+/// inked in the accent itself. Use for per-row states in tables ("In stock",
+/// "Low stock", "No price found"); neutral counts belong in [`badge`].
+///
+/// Senses hover, so callers can attach an explanation with
+/// `.on_hover_text(..)`.
+pub fn status_badge(
+    ui: &mut Ui,
+    t: &Tokens,
+    kind: BannerKind,
+    glyph: Option<&str>,
+    text: &str,
+) -> Response {
+    let accent = kind_accent(t, kind);
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        TextStyle::Small.resolve(ui.style()),
+        accent,
+    );
+    let icon_w = if glyph.is_some() { 11.0 + 4.0 } else { 0.0 };
+    let pad = vec2(8.0, 3.0);
+    let size = vec2(
+        galley.size().x + icon_w + pad.x * 2.0,
+        galley.size().y.max(11.0) + pad.y * 2.0,
+    );
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    let fill = if kind == BannerKind::Info {
+        t.card
+    } else {
+        accent.gamma_multiply(if t.dark { 0.18 } else { 0.12 })
+    };
+    ui.painter().rect_filled(rect, rect.height() * 0.5, fill);
+    if kind == BannerKind::Info {
+        ui.painter().rect_stroke(
+            rect.shrink(0.5),
+            rect.height() * 0.5,
+            Stroke::new(1.0, t.border),
+            egui::StrokeKind::Outside,
+        );
+    }
+    let mut x = rect.left() + pad.x;
+    if let Some(glyph) = glyph {
+        ui.painter().text(
+            pos2(x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            glyph,
+            icons::font(11.0),
+            accent,
+        );
+        x += icon_w;
+    }
+    ui.painter().galley(
+        pos2(x, rect.center().y - galley.size().y / 2.0),
+        galley,
+        accent,
+    );
+    response
+}
+
+/// A pulsing loading placeholder of `size` — stands in for a value that is
+/// being fetched (a price cell while pricing refreshes). Animates by itself
+/// (schedules its own repaints while visible).
+pub fn skeleton(ui: &mut Ui, t: &Tokens, size: Vec2) -> Response {
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    let time = ui.input(|i| i.time) as f32;
+    let pulse = 0.5 + 0.5 * (time * 3.2).sin();
+    let base = if t.dark { t.card_hover } else { t.border_soft };
+    let fill = lerp_color(base, t.border_strong, pulse * 0.45);
+    ui.painter().rect_filled(rect, t.rounding_xs(), fill);
+    ui.ctx().request_repaint_after(Duration::from_millis(33));
+    response
+}
+
+/// An accent-tinted indeterminate spinner, `size` px square.
+pub fn spinner(ui: &mut Ui, t: &Tokens, size: f32) -> Response {
+    ui.add(egui::Spinner::new().size(size).color(t.accent))
+}
+
+/// Result of a [`number_input`] frame.
+pub struct NumberInputResponse {
+    /// The inner text edit's response (focus, hover — attach tooltips here).
+    pub response: Response,
+    /// `Some(new)` on the frame the user commits a changed value (Enter or
+    /// focus loss). `None` while editing, on Escape (which reverts), and
+    /// when the committed value equals the current one.
+    pub committed: Option<u64>,
+}
+
+/// A compact, bordered, right-aligned integer field for inline table
+/// editing (a BOM quantity).
+///
+/// It edits a private text buffer while focused and only reports a value
+/// when the user **commits** — Enter or clicking away — so a caller can
+/// persist on commit without per-keystroke writes or a separate Save
+/// button. Escape reverts. Non-digits are ignored; the committed value is
+/// clamped to `min..=max`.
+///
+/// `id_source` must be stable and unique per row (e.g. `("bom_qty",
+/// line_id)`) — the edit buffer is keyed off it.
+pub fn number_input(
+    ui: &mut Ui,
+    t: &Tokens,
+    id_source: impl Hash + std::fmt::Debug,
+    value: u64,
+    min: u64,
+    max: u64,
+    width: f32,
+) -> NumberInputResponse {
+    let id = egui::Id::new(id_source);
+    let buf_id = id.with("number_input_buf");
+    let height = 28.0;
+    let (rect, frame_resp) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let focused = ui.memory(|m| m.has_focus(id));
+    let hv = hover_t(ui, id.with("hover"), frame_resp.hovered() || focused);
+
+    let mut buf: String = if focused {
+        ui.data(|d| d.get_temp::<String>(buf_id))
+            .unwrap_or_else(|| value.to_string())
+    } else {
+        value.to_string()
+    };
+
+    let fill = lerp_color(Color32::TRANSPARENT, t.bg_chrome, hv);
+    if fill.a() > 0 {
+        ui.painter().rect_filled(rect, t.rounding_sm(), fill);
+    }
+    let border = if focused {
+        t.accent
+    } else {
+        lerp_color(t.border_soft, t.border_strong, hv)
+    };
+    ui.painter().rect_stroke(
+        rect.shrink(0.5),
+        t.rounding_sm(),
+        Stroke::new(1.0, border),
+        egui::StrokeKind::Outside,
+    );
+    let edit_rect = rect.shrink2(vec2(8.0, 0.0));
+    let mut edit_ui = ui.new_child(
+        UiBuilder::new()
+            .max_rect(edit_rect)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    let response = edit_ui.add(
+        egui::TextEdit::singleline(&mut buf)
+            .id(id)
+            .frame(egui::Frame::NONE)
+            .horizontal_align(Align::Max)
+            .char_limit(9)
+            .desired_width(edit_rect.width()),
+    );
+    buf.retain(|c| c.is_ascii_digit());
+
+    let mut committed = None;
+    if response.lost_focus() {
+        let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if !escaped {
+            if let Ok(parsed) = buf.parse::<u64>() {
+                let parsed = parsed.clamp(min, max);
+                if parsed != value {
+                    committed = Some(parsed);
+                }
+            }
+        }
+        ui.data_mut(|d| d.remove::<String>(buf_id));
+    } else if response.has_focus() {
+        ui.data_mut(|d| d.insert_temp(buf_id, buf));
+    }
+    NumberInputResponse {
+        response,
+        committed,
+    }
+}
+
+/// Lay `text` out on one line, eliding with `…` past `max_width`.
+fn elided(
+    ui: &Ui,
+    text: &str,
+    font: egui::FontId,
+    color: Color32,
+    max_width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_owned(),
+        egui::text::TextFormat {
+            font_id: font,
+            color,
+            ..Default::default()
+        },
+    );
+    job.wrap = egui::text::TextWrapping {
+        max_width: max_width.max(0.0),
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// A full-width, two-line, hover-highlighted clickable row for search
+/// results and pickers: a strong `title`, a muted `subtitle` below it, and an
+/// optional right-aligned `meta` caption (a package, a source). Every line
+/// elides with `…` rather than wrapping, so rows keep a fixed 48 px rhythm.
+///
+/// `id_source` must be stable per row (results reorder between queries).
+pub fn result_row(
+    ui: &mut Ui,
+    t: &Tokens,
+    id_source: impl Hash + std::fmt::Debug,
+    title: &str,
+    subtitle: &str,
+    meta: &str,
+    selected: bool,
+) -> Response {
+    let height = 48.0;
+    let width = ui.available_width();
+    let rect = ui.allocate_space(vec2(width, height)).1;
+    let response = ui.interact(rect, egui::Id::new(id_source), Sense::click());
+    let hv = hover_t(ui, response.id, response.hovered());
+    let bg = if selected {
+        t.accent_soft
+    } else {
+        t.card_hover.gamma_multiply(hv)
+    };
+    if bg.a() > 0 {
+        ui.painter().rect_filled(rect, t.rounding_sm(), bg);
+    }
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let pad = 12.0;
+    let meta_w = if meta.is_empty() {
+        0.0
+    } else {
+        let g = elided(
+            ui,
+            meta,
+            TextStyle::Small.resolve(ui.style()),
+            t.text_2,
+            width * 0.3,
+        );
+        let w = g.size().x;
+        ui.painter().galley(
+            pos2(rect.right() - pad - w, rect.center().y - g.size().y / 2.0),
+            g,
+            t.text_2,
+        );
+        w + 12.0
+    };
+    let text_w = width - pad * 2.0 - meta_w;
+    let title_g = elided(
+        ui,
+        title,
+        TextStyle::Body.resolve(ui.style()),
+        t.text,
+        text_w,
+    );
+    let sub_g = elided(
+        ui,
+        subtitle,
+        TextStyle::Small.resolve(ui.style()),
+        t.text_3,
+        text_w,
+    );
+    let block_h = title_g.size().y + 2.0 + sub_g.size().y;
+    let top = rect.center().y - block_h / 2.0;
+    ui.painter()
+        .galley(pos2(rect.left() + pad, top), title_g.clone(), t.text);
+    ui.painter().galley(
+        pos2(rect.left() + pad, top + title_g.size().y + 2.0),
+        sub_g,
+        t.text_3,
+    );
+    response
+}
+
+/// A full-width, tone-tinted callout with an optional trailing action
+/// button: leading icon, bold `title`, a muted one-line `body`, and — when
+/// `action` is `Some((icon, label))` — a primary [`icon_text_button`] on the
+/// right. For one concise page-level state ("Sign in to see live prices")
+/// that has a single fix; per-item states belong next to their item.
+///
+/// Returns `true` on the frame the action is clicked.
+pub fn action_banner(
+    ui: &mut Ui,
+    t: &Tokens,
+    kind: BannerKind,
+    glyph: &str,
+    title: &str,
+    body: &str,
+    action: Option<(&str, &str)>,
+) -> bool {
+    let accent = kind_accent(t, kind);
+    let mut clicked = false;
+    egui::Frame::new()
+        .fill(accent.gamma_multiply(if t.dark { 0.10 } else { 0.07 }))
+        .stroke(Stroke::new(1.0, accent.gamma_multiply(0.45)))
+        .corner_radius(t.rounding_md())
+        .inner_margin(egui::Margin::symmetric(14, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(icons::icon(glyph, 18.0, accent));
+                ui.add_space(4.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(RichText::new(title).strong().color(t.text));
+                    if !body.is_empty() {
+                        ui.label(RichText::new(body).size(12.0).color(t.text_2));
+                    }
+                });
+                if let Some((icon, label)) = action {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        clicked = icon_text_button(ui, t, ButtonKind::Primary, icon, label, 32.0)
+                            .clicked();
+                    });
+                }
+            });
+        });
+    clicked
+}
+
+/// A designed empty state that fills `ui`'s available rect: a round icon
+/// badge, a display-weight `heading`, one muted `body` line, and a centred
+/// row of caller-supplied actions (`add_actions` — typically one primary
+/// and one secondary [`text_button`] / [`icon_text_button`]).
+///
+/// Unlike [`gate_overlay`] this has no scrim — it is the content of an empty
+/// page, not a lock over live content. `id_source` keys the one-frame
+/// width measurement used to centre the action row.
+pub fn empty_panel(
+    ui: &mut Ui,
+    t: &Tokens,
+    id_source: impl Hash + std::fmt::Debug,
+    glyph: &str,
+    heading: &str,
+    body: &str,
+    add_actions: impl FnOnce(&mut Ui),
+) {
+    let avail = ui.available_size();
+    let width_id = egui::Id::new(id_source).with("empty_panel_actions_w");
+    ui.allocate_ui_with_layout(avail, Layout::top_down(Align::Center), |ui| {
+        ui.add_space((avail.y * 0.22).max(t.space_5));
+        icon_avatar(ui, t, glyph, 64.0);
+        ui.add_space(t.space_4);
+        ui.label(
+            RichText::new(heading)
+                .text_style(TextStyle::Heading)
+                .strong()
+                .color(t.text),
+        );
+        ui.add_space(t.space_2);
+        ui.add(
+            egui::Label::new(RichText::new(body).size(14.0).color(t.text_2))
+                .wrap_mode(egui::TextWrapMode::Wrap),
+        );
+        ui.add_space(t.space_5);
+        // Centre an unknown-width row: measure it one frame, offset the
+        // next. Settles on the second frame; repaint once if it moved.
+        let prev_w: f32 = ui.data(|d| d.get_temp(width_id)).unwrap_or(0.0);
+        let row = ui.horizontal(|ui| {
+            ui.add_space(((ui.available_width() - prev_w) * 0.5).max(0.0));
+            let start = ui.cursor().left();
+            ui.spacing_mut().item_spacing.x = t.space_2;
+            add_actions(ui);
+            ui.min_rect().right() - start
+        });
+        let w = row.inner;
+        if (w - prev_w).abs() > 0.5 {
+            ui.data_mut(|d| d.insert_temp(width_id, w));
+            ui.ctx().request_repaint();
+        }
+    });
 }
