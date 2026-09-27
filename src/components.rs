@@ -579,8 +579,15 @@ pub fn modal(
     }
 
     // The dialog itself, centred, above the backdrop.
+    // Keep the dialog in a strictly higher order than its full-screen
+    // backdrop. Two Areas in the same order rely on retained interaction
+    // ordering; after an Escape frame (which intentionally renders neither
+    // Area), reopening could restore the backdrop above the visible dialog
+    // and make every control click-dead. `Tooltip` is egui's top normal UI
+    // order (below Debug), so popups owned by controls can still participate
+    // while the modal itself always wins over the Foreground backdrop.
     egui::Area::new(egui::Id::new(("tokito_ui_modal", title)))
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Tooltip)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, -20.0])
         .show(ctx, |ui| {
             egui::Frame::new()
@@ -1858,6 +1865,74 @@ mod toast_stack_tests {
             stack.set_keyed(format!("key-{i}"), format!("status {i}"), ToastKind::Error);
         }
         assert!(stack.items.len() <= ToastStack::MAX_RETAINED);
+    }
+}
+
+#[cfg(test)]
+mod modal_tests {
+    use super::*;
+    use egui_kittest::{kittest::Queryable, Harness};
+
+    #[derive(Default)]
+    struct ModalApp {
+        open: bool,
+        clicks: usize,
+        button_center: Option<egui::Pos2>,
+        dialog_is_top_layer: bool,
+    }
+
+    impl eframe::App for ModalApp {
+        fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+            let ctx = ui.ctx();
+            let tokens = Tokens::dark();
+            crate::theme::apply(ctx, &tokens);
+            modal(ctx, &tokens, &mut self.open, "Settings", 360.0, |ui| {
+                let response = ui.button("Interactive setting");
+                self.button_center = Some(response.rect.center());
+                if response.clicked() {
+                    self.clicks += 1;
+                }
+            });
+            if let Some(pos) = self.button_center {
+                self.dialog_is_top_layer = ctx.layer_id_at(pos)
+                    == Some(egui::LayerId::new(
+                        egui::Order::Tooltip,
+                        egui::Id::new(("tokito_ui_modal", "Settings")),
+                    ));
+            }
+        }
+    }
+
+    /// TokitoAI/tokito#785: Escape must not leave retained Area ordering in
+    /// a state where the next modal instance is visible but its controls are
+    /// covered by the full-screen backdrop.
+    #[test]
+    fn modal_controls_remain_clickable_after_escape_and_reopen() {
+        let mut harness = Harness::builder().build_eframe(|cc| {
+            let mut fonts = egui::FontDefinitions::default();
+            crate::theme::add_phosphor(&mut fonts);
+            cc.egui_ctx.set_fonts(fonts);
+            ModalApp {
+                open: true,
+                clicks: 0,
+                button_center: None,
+                dialog_is_top_layer: false,
+            }
+        });
+        harness.run();
+
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert!(!harness.state().open);
+
+        harness.state_mut().open = true;
+        harness.run();
+        harness.get_by_label("Interactive setting").click();
+        harness.run();
+
+        assert_eq!(harness.state().clicks, 1);
+        assert!(harness.state().open);
+        assert!(harness.state().dialog_is_top_layer);
     }
 }
 

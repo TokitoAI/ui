@@ -17,6 +17,7 @@ egui_extras = "0.35"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]
+egui_kittest = { version = "0.35", features = ["eframe"] }
 # default-features off: eframe 0.35 flipped its default renderer from glow to
 # wgpu; the gallery example renders on glow, matching the consuming app.
 eframe = { version = "0.35", default-features = false, features = [
