@@ -1471,6 +1471,9 @@ pub struct DataColumn<'a> {
     pub numeric: bool,
     /// Clicking the header drives the table's [`SortState`].
     pub sortable: bool,
+    /// Cell values the column must fit without eliding (13 px text, the
+    /// cell font) — see [`DataColumn::fit_values`].
+    pub fit: &'a [String],
 }
 
 impl<'a> DataColumn<'a> {
@@ -1481,6 +1484,7 @@ impl<'a> DataColumn<'a> {
             width,
             numeric: false,
             sortable: true,
+            fit: &[],
         }
     }
 
@@ -1495,6 +1499,17 @@ impl<'a> DataColumn<'a> {
     /// Mark this column as not sortable (header renders as a plain caption).
     pub fn unsorted(mut self) -> Self {
         self.sortable = false;
+        self
+    }
+
+    /// Never narrower than the widest of `values` (laid out as 13 px cell
+    /// text) plus the cell padding — for a column of amounts whose width
+    /// varies by orders of magnitude ("₹9,50,681.25"), so a large value
+    /// widens its column instead of eliding. Like the header caption, this
+    /// raises a [`ColumnWidth::Fixed`] width or a [`ColumnWidth::Flex`]
+    /// minimum; flex columns give way first.
+    pub fn fit_values(mut self, values: &'a [String]) -> Self {
+        self.fit = values;
         self
     }
 }
@@ -1706,9 +1721,10 @@ fn column_widths(columns: &[DataColumn<'_>], header_min: &[f32], width: f32) -> 
         .collect()
 }
 
-/// The width each column's header caption needs — its upper-case caption
-/// plus `cell_padding` on both sides, the sort arrow included for a sortable
-/// column (so toggling a sort never makes a header clip either).
+/// The width each column needs — its upper-case header caption (the sort
+/// arrow included for a sortable column, so toggling a sort never makes a
+/// header clip either) or its widest [`DataColumn::fit_values`] value,
+/// whichever is wider, plus `cell_padding` on both sides.
 fn header_min_widths(
     ui: &Ui,
     t: &Tokens,
@@ -1718,16 +1734,38 @@ fn header_min_widths(
     columns
         .iter()
         .map(|c| {
-            if c.label.is_empty() {
-                return 0.0;
-            }
-            let text = if c.sortable {
-                format!("{}{}", c.label, SortDir::Desc.arrow())
+            let values = c
+                .fit
+                .iter()
+                .map(|v| {
+                    ui.painter()
+                        .layout_no_wrap(
+                            v.clone(),
+                            egui::FontId::proportional(13.0),
+                            Color32::PLACEHOLDER,
+                        )
+                        .size()
+                        .x
+                })
+                .fold(0.0_f32, f32::max);
+            let caption = if c.label.is_empty() {
+                0.0
             } else {
-                c.label.to_owned()
+                let text = if c.sortable {
+                    format!("{}{}", c.label, SortDir::Desc.arrow())
+                } else {
+                    c.label.to_owned()
+                };
+                ui.fonts_mut(|f| f.layout_job(caption_job(&text, t.text_2)))
+                    .size()
+                    .x
             };
-            let galley = ui.fonts_mut(|f| f.layout_job(caption_job(&text, t.text_2)));
-            galley.size().x.ceil() + cell_padding * 2.0
+            let need = caption.max(values);
+            if need <= 0.0 {
+                0.0
+            } else {
+                need.ceil() + cell_padding * 2.0
+            }
         })
         .collect()
 }
@@ -2003,6 +2041,7 @@ pub struct CellText<'a> {
     size: f32,
     color: Color32,
     mono: bool,
+    badge: Option<(&'a str, PillColors)>,
 }
 
 impl<'a> CellText<'a> {
@@ -2013,7 +2052,17 @@ impl<'a> CellText<'a> {
             size: 13.0,
             color,
             mono: false,
+            badge: None,
         }
+    }
+
+    /// A pill after the text on this line ("Best", "USD only"). The pill is
+    /// never elided — the text gives way first — and it sits on this line
+    /// only, so it can't squeeze a neighbouring line (a SKU under a
+    /// distributor name) into `…`.
+    pub fn badge(mut self, t: &Tokens, text: &'a str, style: PillStyle) -> Self {
+        self.badge = Some((text, PillColors::of(t, style)));
+        self
     }
 
     /// Set the point size (the secondary line of a two-line cell is ~11.5).
@@ -2035,7 +2084,7 @@ impl<'a> CellText<'a> {
 /// can attach a tooltip.
 pub fn cell_text(ui: &mut Ui, lines: &[CellText<'_>]) -> Response {
     let max_w = ui.available_width();
-    let galleys: Vec<_> = lines
+    let laid: Vec<CellLine> = lines
         .iter()
         .map(|l| {
             let font = if l.mono {
@@ -2043,31 +2092,151 @@ pub fn cell_text(ui: &mut Ui, lines: &[CellText<'_>]) -> Response {
             } else {
                 egui::FontId::proportional(l.size)
             };
-            elided(ui, l.text, font, l.color, max_w)
+            let pill = l
+                .badge
+                .map(|(text, colors)| (pill_galley(ui, text), colors));
+            let pill_w = pill
+                .as_ref()
+                .map_or(0.0, |(g, _)| pill_size(g).x + PILL_GAP);
+            let text = elided(ui, l.text, font, l.color, (max_w - pill_w).max(0.0));
+            CellLine { text, pill }
         })
         .collect();
     let gap = 2.0;
-    let w = galleys
+    let w = laid
         .iter()
-        .map(|g| g.size().x)
+        .map(|l| l.size().x)
         .fold(0.0_f32, f32::max)
         .min(max_w);
-    let h = galleys.iter().map(|g| g.size().y).sum::<f32>()
-        + gap * galleys.len().saturating_sub(1) as f32;
+    let h =
+        laid.iter().map(|l| l.size().y).sum::<f32>() + gap * laid.len().saturating_sub(1) as f32;
     let (rect, response) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
     let right_aligned = ui.layout().horizontal_placement() == Align::Max;
     let mut y = rect.top();
-    for (g, l) in galleys.into_iter().zip(lines) {
+    for (line, l) in laid.into_iter().zip(lines) {
+        let size = line.size();
         let x = if right_aligned {
-            rect.right() - g.size().x
+            rect.right() - size.x
         } else {
             rect.left()
         };
-        let gh = g.size().y;
-        ui.painter().galley(pos2(x, y), g, l.color);
-        y += gh + gap;
+        let cy = y + size.y / 2.0;
+        let text_w = line.text.size().x;
+        let text_h = line.text.size().y;
+        ui.painter()
+            .galley(pos2(x, cy - text_h / 2.0), line.text, l.color);
+        if let Some((g, colors)) = line.pill {
+            let s = pill_size(&g);
+            let r = Rect::from_min_size(pos2(x + text_w + PILL_GAP, cy - s.y / 2.0), s);
+            paint_pill(ui, r, g, colors);
+        }
+        y += size.y + gap;
     }
     response
+}
+
+/// One laid-out [`cell_text`] line: its text and optional trailing pill.
+struct CellLine {
+    text: std::sync::Arc<egui::Galley>,
+    pill: Option<(std::sync::Arc<egui::Galley>, PillColors)>,
+}
+
+impl CellLine {
+    fn size(&self) -> Vec2 {
+        match &self.pill {
+            Some((g, _)) => {
+                let s = pill_size(g);
+                vec2(
+                    self.text.size().x + PILL_GAP + s.x,
+                    self.text.size().y.max(s.y),
+                )
+            }
+            None => self.text.size(),
+        }
+    }
+}
+
+/// How a small inline pill is painted — a [`CellText::badge`], a
+/// [`ResultRow::badge`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PillStyle {
+    /// Solid accent fill with accent ink — the one recommended item
+    /// ("Best"), as [`accent_badge`].
+    Solid,
+    /// A soft wash of the tone, inked in it ("Exact", "Obsolete"), as
+    /// [`status_badge`]; [`BannerKind::Info`] is a neutral bordered pill
+    /// (a package, "0603").
+    Tone(BannerKind),
+}
+
+/// A pill's resolved colours (resolved against [`Tokens`] up front so a pill
+/// can be painted where no `&Tokens` is in reach).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PillColors {
+    fill: Color32,
+    ink: Color32,
+    stroke: Option<Color32>,
+}
+
+impl PillColors {
+    fn of(t: &Tokens, style: PillStyle) -> Self {
+        match style {
+            PillStyle::Solid => Self {
+                fill: t.accent,
+                ink: t.accent_ink,
+                stroke: None,
+            },
+            PillStyle::Tone(BannerKind::Info) => Self {
+                fill: t.card,
+                ink: t.text_2,
+                stroke: Some(t.border),
+            },
+            PillStyle::Tone(kind) => {
+                let accent = kind_accent(t, kind);
+                Self {
+                    fill: accent.gamma_multiply(if t.dark { 0.18 } else { 0.12 }),
+                    ink: accent,
+                    stroke: None,
+                }
+            }
+        }
+    }
+}
+
+/// Space between a line's text and its trailing pill.
+const PILL_GAP: f32 = 6.0;
+/// A pill's padding around its caption.
+const PILL_PAD: Vec2 = vec2(8.0, 3.0);
+
+fn pill_galley(ui: &Ui, text: &str) -> std::sync::Arc<egui::Galley> {
+    ui.painter().layout_no_wrap(
+        text.to_owned(),
+        TextStyle::Small.resolve(ui.style()),
+        Color32::PLACEHOLDER,
+    )
+}
+
+fn pill_size(galley: &egui::Galley) -> Vec2 {
+    vec2(
+        galley.size().x + PILL_PAD.x * 2.0,
+        galley.size().y.max(11.0) + PILL_PAD.y * 2.0,
+    )
+}
+
+fn paint_pill(ui: &Ui, rect: Rect, galley: std::sync::Arc<egui::Galley>, colors: PillColors) {
+    let radius = rect.height() * 0.5;
+    ui.painter().rect_filled(rect, radius, colors.fill);
+    if let Some(stroke) = colors.stroke {
+        ui.painter().rect_stroke(
+            rect.shrink(0.5),
+            radius,
+            Stroke::new(1.0, stroke),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let size = galley.size();
+    ui.painter()
+        .galley(rect.center() - size / 2.0, galley, colors.ink);
 }
 
 /// A small filled status dot (`diameter` px) in a [`BannerKind`] tone — the
@@ -4423,27 +4592,99 @@ fn elided(
     ui.fonts_mut(|f| f.layout_job(job))
 }
 
+/// Height of every [`result_row`] (and [`result_row_skeleton`]).
+pub const RESULT_ROW_HEIGHT: f32 = 56.0;
+
+/// What one [`result_row`] shows. Build with [`ResultRow::new`] and the
+/// chained setters; everything but the title is optional.
+///
+/// ```text
+/// TITLE  aside  [badge] [badge]                    meta
+/// subtitle                                       [chip]
+/// ```
+#[derive(Clone, Default)]
+pub struct ResultRow<'a> {
+    title: &'a str,
+    mono: bool,
+    aside: &'a str,
+    badges: Vec<(&'a str, PillStyle)>,
+    subtitle: &'a str,
+    meta: &'a str,
+    chip: &'a str,
+    selected: bool,
+}
+
+impl<'a> ResultRow<'a> {
+    /// A row headed by `title` (13.5 px, primary ink).
+    pub fn new(title: &'a str) -> Self {
+        Self {
+            title,
+            ..Default::default()
+        }
+    }
+
+    /// Render the title in the monospace family (a part number).
+    pub fn mono(mut self) -> Self {
+        self.mono = true;
+        self
+    }
+
+    /// Muted text right after the title on the first line (a manufacturer).
+    /// Elides before the title does.
+    pub fn aside(mut self, text: &'a str) -> Self {
+        self.aside = text;
+        self
+    }
+
+    /// A pill after the title (and aside) on the first line — "Exact",
+    /// "Obsolete". Pills are never elided; the text gives way.
+    pub fn badge(mut self, text: &'a str, style: PillStyle) -> Self {
+        self.badges.push((text, style));
+        self
+    }
+
+    /// The muted second line (a description).
+    pub fn subtitle(mut self, text: &'a str) -> Self {
+        self.subtitle = text;
+        self
+    }
+
+    /// Right-aligned text on the first line ("₹787.33 · 7,606 in stock").
+    pub fn meta(mut self, text: &'a str) -> Self {
+        self.meta = text;
+        self
+    }
+
+    /// A neutral pill right-aligned on the second line (a package, "0603").
+    pub fn chip(mut self, text: &'a str) -> Self {
+        self.chip = text;
+        self
+    }
+
+    /// Paint the row with the accent wash (the picked / in-progress row).
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+}
+
 /// A full-width, two-line, hover-highlighted clickable row for search
-/// results and pickers: a strong `title`, a muted `subtitle` below it, and an
-/// optional right-aligned `meta` caption (a package, a source). Every line
-/// elides with `…` rather than wrapping, so rows keep a fixed 48 px rhythm.
+/// results and pickers — see [`ResultRow`] for what it can show. Every text
+/// run elides with `…` rather than wrapping, so rows keep a fixed
+/// [`RESULT_ROW_HEIGHT`] rhythm; pills never elide.
 ///
 /// `id_source` must be stable per row (results reorder between queries).
 pub fn result_row(
     ui: &mut Ui,
     t: &Tokens,
     id_source: impl Hash + std::fmt::Debug,
-    title: &str,
-    subtitle: &str,
-    meta: &str,
-    selected: bool,
+    row: &ResultRow<'_>,
 ) -> Response {
-    let height = 48.0;
     let width = ui.available_width();
-    let rect = ui.allocate_space(vec2(width, height)).1;
+    let rect = ui.allocate_space(vec2(width, RESULT_ROW_HEIGHT)).1;
     let response = ui.interact(rect, egui::Id::new(id_source), Sense::click());
     let hv = hover_t(ui, response.id, response.hovered());
-    let bg = if selected {
+    let bg = if row.selected {
         t.accent_soft
     } else {
         t.card_hover.gamma_multiply(hv)
@@ -4455,48 +4696,155 @@ pub fn result_row(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let pad = 12.0;
-    let meta_w = if meta.is_empty() {
-        0.0
-    } else {
-        let g = elided(
+    let gap = 8.0;
+    let small = TextStyle::Small.resolve(ui.style());
+
+    // Right column: meta over chip.
+    let meta_g = (!row.meta.is_empty()).then(|| {
+        elided(
             ui,
-            meta,
-            TextStyle::Small.resolve(ui.style()),
+            row.meta,
+            egui::FontId::proportional(12.5),
             t.text_2,
-            width * 0.3,
-        );
-        let w = g.size().x;
-        ui.painter().galley(
-            pos2(rect.right() - pad - w, rect.center().y - g.size().y / 2.0),
-            g,
-            t.text_2,
-        );
-        w + 12.0
+            width * 0.4,
+        )
+    });
+    let chip = (!row.chip.is_empty()).then(|| {
+        (
+            pill_galley(ui, row.chip),
+            PillColors::of(t, PillStyle::Tone(BannerKind::Info)),
+        )
+    });
+    let right_w = meta_g
+        .as_ref()
+        .map_or(0.0, |g| g.size().x)
+        .max(chip.as_ref().map_or(0.0, |(g, _)| pill_size(g).x));
+    let text_w = (width - pad * 2.0 - if right_w > 0.0 { right_w + 16.0 } else { 0.0 }).max(0.0);
+
+    // First line: title, aside, then the pills.
+    let pills: Vec<_> = row
+        .badges
+        .iter()
+        .map(|(text, style)| (pill_galley(ui, text), PillColors::of(t, *style)))
+        .collect();
+    let pills_w: f32 = pills.iter().map(|(g, _)| pill_size(g).x + gap).sum();
+    let title_font = if row.mono {
+        egui::FontId::monospace(13.5)
+    } else {
+        egui::FontId::proportional(13.5)
     };
-    let text_w = width - pad * 2.0 - meta_w;
     let title_g = elided(
         ui,
-        title,
-        TextStyle::Body.resolve(ui.style()),
+        row.title,
+        title_font,
         t.text,
-        text_w,
+        (text_w - pills_w).max(0.0),
     );
-    let sub_g = elided(
-        ui,
-        subtitle,
-        TextStyle::Small.resolve(ui.style()),
-        t.text_3,
-        text_w,
-    );
-    let block_h = title_g.size().y + 2.0 + sub_g.size().y;
-    let top = rect.center().y - block_h / 2.0;
-    ui.painter()
-        .galley(pos2(rect.left() + pad, top), title_g.clone(), t.text);
-    ui.painter().galley(
-        pos2(rect.left() + pad, top + title_g.size().y + 2.0),
-        sub_g,
-        t.text_3,
-    );
+    let aside_room = text_w - pills_w - title_g.size().x - gap;
+    let aside_g = (!row.aside.is_empty() && aside_room >= 24.0).then(|| {
+        elided(
+            ui,
+            row.aside,
+            egui::FontId::proportional(12.5),
+            t.text_2,
+            aside_room,
+        )
+    });
+    let sub_g = elided(ui, row.subtitle, small, t.text_3, text_w);
+
+    let pill_h = pills
+        .iter()
+        .map(|(g, _)| pill_size(g).y)
+        .chain(chip.as_ref().map(|(g, _)| pill_size(g).y))
+        .fold(0.0_f32, f32::max);
+    let line1_h = title_g.size().y.max(pill_h);
+    let line2_h = if row.subtitle.is_empty() && chip.is_none() {
+        0.0
+    } else {
+        sub_g
+            .size()
+            .y
+            .max(chip.as_ref().map_or(0.0, |(g, _)| pill_size(g).y))
+    };
+    let line_gap = if line2_h > 0.0 { 4.0 } else { 0.0 };
+    let top = rect.center().y - (line1_h + line_gap + line2_h) / 2.0;
+    let y1 = top + line1_h / 2.0;
+    let y2 = top + line1_h + line_gap + line2_h / 2.0;
+
+    let painter = ui.painter();
+    let mut x = rect.left() + pad;
+    let title_size = title_g.size();
+    painter.galley(pos2(x, y1 - title_size.y / 2.0), title_g, t.text);
+    x += title_size.x + gap;
+    if let Some(g) = aside_g {
+        let s = g.size();
+        painter.galley(pos2(x, y1 - s.y / 2.0), g, t.text_2);
+        x += s.x + gap;
+    }
+    for (g, colors) in pills {
+        let s = pill_size(&g);
+        paint_pill(
+            ui,
+            Rect::from_min_size(pos2(x, y1 - s.y / 2.0), s),
+            g,
+            colors,
+        );
+        x += s.x + gap;
+    }
+    if line2_h > 0.0 {
+        let s = sub_g.size();
+        ui.painter()
+            .galley(pos2(rect.left() + pad, y2 - s.y / 2.0), sub_g, t.text_3);
+    }
+    let right = rect.right() - pad;
+    if let Some(g) = meta_g {
+        let s = g.size();
+        ui.painter()
+            .galley(pos2(right - s.x, y1 - s.y / 2.0), g, t.text_2);
+    }
+    if let Some((g, colors)) = chip {
+        let s = pill_size(&g);
+        paint_pill(
+            ui,
+            Rect::from_min_size(pos2(right - s.x, y2 - s.y / 2.0), s),
+            g,
+            colors,
+        );
+    }
+    response
+}
+
+/// A [`result_row`]-sized loading placeholder: pulsing bars where the title,
+/// subtitle and meta will be. Show a few while a search is in flight.
+pub fn result_row_skeleton(ui: &mut Ui, t: &Tokens, index: usize) -> Response {
+    let width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(vec2(width, RESULT_ROW_HEIGHT), Sense::hover());
+    let time = ui.input(|i| i.time) as f32;
+    // Stagger rows so the list shimmers rather than blinking in unison.
+    let pulse = 0.5 + 0.5 * (time * 3.2 - index as f32 * 0.6).sin();
+    let base = if t.dark { t.card_hover } else { t.border_soft };
+    let fill = lerp_color(base, t.border_strong, pulse * 0.45);
+    let pad = 12.0;
+    // Vary the bar lengths a little per row.
+    let vary = [1.0, 0.8, 0.9, 0.7][index % 4];
+    let bars = [
+        Rect::from_min_size(
+            pos2(rect.left() + pad, rect.center().y - 14.0),
+            vec2(150.0 * vary, 12.0),
+        ),
+        Rect::from_min_size(
+            pos2(rect.left() + pad, rect.center().y + 4.0),
+            vec2((width * 0.5 * vary).min(320.0), 10.0),
+        ),
+        Rect::from_min_size(
+            pos2(rect.right() - pad - 110.0, rect.center().y - 14.0),
+            vec2(110.0, 12.0),
+        ),
+    ];
+    for bar in bars {
+        ui.painter().rect_filled(bar, t.rounding_xs(), fill);
+    }
+    ui.ctx().request_repaint_after(Duration::from_millis(33));
     response
 }
 
@@ -4723,5 +5071,115 @@ mod data_table_tests {
             checked = true;
         });
         assert!(checked);
+    }
+
+    #[test]
+    fn a_fit_column_widens_to_its_widest_value() {
+        let ctx = egui::Context::default();
+        let t = Tokens::dark();
+        let mut checked = false;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let totals = vec!["₹4,840.00".to_string(), "₹9,50,681.25".to_string()];
+            let cols = [
+                DataColumn::new("Distributor", ColumnWidth::Flex(110.0)).unsorted(),
+                DataColumn::numeric("Total", ColumnWidth::Fixed(60.0))
+                    .unsorted()
+                    .fit_values(&totals),
+            ];
+            let need = header_min_widths(ui, &t, &cols, 10.0);
+            let widths = column_widths(&cols, &need, 420.0);
+            let widest = ui
+                .painter()
+                .layout_no_wrap(
+                    totals[1].clone(),
+                    egui::FontId::proportional(13.0),
+                    Color32::WHITE,
+                )
+                .size()
+                .x;
+            assert!(widths[1] - 20.0 + 0.5 >= widest, "{widths:?} < {widest}");
+            // The flex column gives way.
+            assert!((widths[0] + widths[1] - 420.0).abs() < 0.5);
+            checked = true;
+        });
+        assert!(checked);
+    }
+
+    /// Paint `lines` in a `width`-wide left-to-right cell; return what the
+    /// cell allocated.
+    fn cell_rect(width: f32, lines: impl Fn(&Tokens) -> Vec<CellText<'static>>) -> Rect {
+        let ctx = egui::Context::default();
+        let t = Tokens::dark();
+        let mut out = Rect::NOTHING;
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, 200.0))),
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| {
+            out = cell_text(ui, &lines(&t)).rect;
+        });
+        out
+    }
+
+    #[test]
+    fn a_line_badge_sits_on_its_own_line_and_never_elides_the_others() {
+        let sku = |t: &Tokens| CellText::new("497-6063-1-ND", t.text_3).size(11.0).mono();
+        // Without a badge: the SKU line's width.
+        let plain = cell_rect(400.0, |t| vec![CellText::new("DigiKey", t.text), sku(t)]);
+        // With a badge on the first line only: the block widens to the
+        // badged line, but no wider than needed — the SKU keeps its width.
+        let badged = cell_rect(400.0, |t| {
+            vec![
+                CellText::new("DigiKey", t.text).badge(t, "Best", PillStyle::Solid),
+                sku(t),
+            ]
+        });
+        assert!(badged.width() >= plain.width());
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let sku_w = ui
+                .painter()
+                .layout_no_wrap(
+                    "497-6063-1-ND".into(),
+                    egui::FontId::monospace(11.0),
+                    Color32::WHITE,
+                )
+                .size()
+                .x;
+            assert!(badged.width() >= sku_w - 0.5, "SKU line was squeezed");
+        });
+        // The pill is taller than a 13 px line, so the badged line grows
+        // the block a little rather than overlapping the SKU below.
+        assert!(badged.height() >= plain.height());
+    }
+
+    #[test]
+    fn result_rows_keep_one_height_with_or_without_extras() {
+        let ctx = egui::Context::default();
+        let t = Tokens::dark();
+        let mut heights = Vec::new();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let plain = result_row(ui, &t, "a", &ResultRow::new("LM358"));
+            let rich = result_row(
+                ui,
+                &t,
+                "b",
+                &ResultRow::new("STM32F103C8T6")
+                    .mono()
+                    .aside("STMicroelectronics")
+                    .badge("Exact", PillStyle::Tone(BannerKind::Accent))
+                    .badge("Obsolete", PillStyle::Tone(BannerKind::Warning))
+                    .subtitle("ARM Cortex-M3 MCU")
+                    .meta("₹787.33 · 7,606 in stock")
+                    .chip("LQFP-48"),
+            );
+            let skeleton = result_row_skeleton(ui, &t, 0);
+            heights = vec![
+                plain.rect.height(),
+                rich.rect.height(),
+                skeleton.rect.height(),
+            ];
+        });
+        assert_eq!(heights, vec![RESULT_ROW_HEIGHT; 3]);
     }
 }
