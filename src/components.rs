@@ -221,6 +221,10 @@ pub fn text_button(
 /// [`icons::ph`] constant). Same visual weights and hover animation as
 /// [`text_button`] — use this when the action reads better with an icon
 /// ("Sign in to Tokito Cloud", "Retry"), and plain `text_button` otherwise.
+///
+/// With an empty `label` it is a square `height × height` button carrying
+/// just the glyph — a toolbar's "⋯" next to same-height text buttons (the
+/// frameless [`icon_button`] reads as floating text there).
 pub fn icon_text_button(
     ui: &mut Ui,
     t: &Tokens,
@@ -230,6 +234,20 @@ pub fn icon_text_button(
     height: f32,
 ) -> Response {
     let icon_size = height * 0.46;
+    if label.is_empty() {
+        let (rect, response) = ui.allocate_exact_size(Vec2::splat(height), Sense::click());
+        let hv = hover_t(ui, response.id, response.hovered());
+        let (fill, ink, border) = button_visuals(t, kind, hv);
+        paint_button_chrome(ui, rect, t, fill, border);
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            icon,
+            icons::font(icon_size),
+            ink,
+        );
+        return response;
+    }
     let gap = t.space_2;
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
@@ -312,15 +330,27 @@ pub fn menu_button(
     add_items: impl FnOnce(&mut Ui),
 ) -> Response {
     let trigger = icon_button(ui, t, glyph, side, t.text_2);
-    let popup_id = egui::Id::new(id_source);
-    egui::Popup::from_toggle_button_response(&trigger)
-        .id(popup_id)
+    popup_menu(&trigger, id_source, add_items);
+    trigger
+}
+
+/// Attach a [`menu_button`]-style popup of [`menu_item`]s to any `trigger`
+/// (e.g. a bordered square [`icon_text_button`] with an empty label in a
+/// toolbar): clicking the trigger toggles the popup below it, and it closes
+/// when an item is clicked or the user clicks away. `id_source` keys the
+/// open state — stable and unique, as for [`menu_button`].
+pub fn popup_menu(
+    trigger: &Response,
+    id_source: impl Hash + std::fmt::Debug,
+    add_items: impl FnOnce(&mut Ui),
+) {
+    egui::Popup::from_toggle_button_response(trigger)
+        .id(egui::Id::new(id_source))
         .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
         .show(|ui| {
             ui.set_min_width(184.0);
             add_items(ui);
         });
-    trigger
 }
 
 /// One row of a [`menu_button`] popup: a leading icon + a label.
@@ -1633,31 +1663,43 @@ fn cell_ui(ui: &mut Ui, rect: Rect, numeric: bool, add_contents: impl FnOnce(&mu
     add_contents(&mut child);
 }
 
-/// Resolve column widths for a table `width` wide.
-fn column_widths(columns: &[DataColumn<'_>], width: f32) -> Vec<f32> {
-    let fixed: f32 = columns
+/// Resolve column widths for a table `width` wide. `header_min[i]` is the
+/// width column `i`'s header caption needs (text + cell padding): a column
+/// is never narrower than that, whatever its [`ColumnWidth`] says, so a
+/// header never clips ("PRICED" drawn as "RICED").
+fn column_widths(columns: &[DataColumn<'_>], header_min: &[f32], width: f32) -> Vec<f32> {
+    let need = |i: usize| header_min.get(i).copied().unwrap_or(0.0).max(0.0);
+    let policy: Vec<ColumnWidth> = columns
         .iter()
-        .map(|c| match c.width {
-            ColumnWidth::Fixed(w) => w,
+        .enumerate()
+        .map(|(i, c)| match c.width {
+            ColumnWidth::Fixed(w) => ColumnWidth::Fixed(w.max(need(i))),
+            ColumnWidth::Flex(m) => ColumnWidth::Flex(m.max(need(i))),
+        })
+        .collect();
+    let fixed: f32 = policy
+        .iter()
+        .map(|w| match w {
+            ColumnWidth::Fixed(w) => *w,
             ColumnWidth::Flex(_) => 0.0,
         })
         .sum();
-    let flex_min: f32 = columns
+    let flex_min: f32 = policy
         .iter()
-        .map(|c| match c.width {
+        .map(|w| match w {
             ColumnWidth::Flex(m) => m.max(0.0),
             ColumnWidth::Fixed(_) => 0.0,
         })
         .sum();
-    let flex_count = columns
+    let flex_count = policy
         .iter()
-        .filter(|c| matches!(c.width, ColumnWidth::Flex(_)))
+        .filter(|w| matches!(w, ColumnWidth::Flex(_)))
         .count()
         .max(1) as f32;
     let spare = (width - fixed).max(0.0);
-    columns
+    policy
         .iter()
-        .map(|c| match c.width {
+        .map(|w| match *w {
             ColumnWidth::Fixed(w) => w,
             ColumnWidth::Flex(min) => {
                 let share = if flex_min > 0.0 {
@@ -1667,6 +1709,32 @@ fn column_widths(columns: &[DataColumn<'_>], width: f32) -> Vec<f32> {
                 };
                 share.max(min)
             }
+        })
+        .collect()
+}
+
+/// The width each column's header caption needs — its upper-case caption
+/// plus `cell_padding` on both sides, the sort arrow included for a sortable
+/// column (so toggling a sort never makes a header clip either).
+fn header_min_widths(
+    ui: &Ui,
+    t: &Tokens,
+    columns: &[DataColumn<'_>],
+    cell_padding: f32,
+) -> Vec<f32> {
+    columns
+        .iter()
+        .map(|c| {
+            if c.label.is_empty() {
+                return 0.0;
+            }
+            let text = if c.sortable {
+                format!("{}{}", c.label, SortDir::Desc.arrow())
+            } else {
+                c.label.to_owned()
+            };
+            let galley = ui.fonts_mut(|f| f.layout_job(caption_job(&text, t.text_2)));
+            galley.size().x.ceil() + cell_padding * 2.0
         })
         .collect()
 }
@@ -1744,7 +1812,8 @@ pub fn data_table(
         painter.rect_filled(outer, t.rounding_md(), t.bg_chrome);
     }
 
-    let widths = column_widths(columns, width);
+    let header_min = header_min_widths(ui, t, columns, cell_padding);
+    let widths = column_widths(columns, &header_min, width);
     let col_rects = |row: Rect| -> Vec<(Rect, bool)> {
         let mut x = row.left();
         columns
@@ -2039,6 +2108,9 @@ pub fn accent_badge(ui: &mut Ui, t: &Tokens, text: &str) -> Response {
 /// rest: borderless, inked in `tone`'s accent (e.g. [`BannerKind::Warning`]
 /// for an attention filter) or muted text when `tone` is `None`.
 ///
+/// `height` is the pill's height — 26 on its own row; the toolbar height
+/// (34) when it shares a [`toolbar`] row with buttons and fields.
+///
 /// Returns the chip's [`Response`]; the caller switches its filter on
 /// `.clicked()`.
 pub fn filter_chip(
@@ -2048,6 +2120,7 @@ pub fn filter_chip(
     count: Option<usize>,
     selected: bool,
     tone: Option<BannerKind>,
+    height: f32,
 ) -> Response {
     let text = match count {
         Some(n) => format!("{label} {n}"),
@@ -2056,7 +2129,7 @@ pub fn filter_chip(
     let galley =
         ui.painter()
             .layout_no_wrap(text, egui::FontId::proportional(12.0), Color32::PLACEHOLDER);
-    let size = vec2(galley.size().x + 20.0, 26.0);
+    let size = vec2(galley.size().x + 20.0 + (height - 26.0).max(0.0), height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hv = hover_t(ui, response.id, response.hovered());
     let radius = rect.height() * 0.5;
@@ -2156,6 +2229,11 @@ pub fn label_tile(ui: &mut Ui, t: &Tokens, text: &str, glyph: &str, side: f32) -
 /// ink), `width` wide — one tier in a row of price breaks, one figure in a
 /// stat strip. `highlighted` marks the one in use with an accent wash and
 /// border.
+///
+/// `clickable` makes it a button (a price-break tier that jumps to that
+/// quantity): it senses clicks, eases a hover wash and border in, darkens
+/// while pressed and shows a pointing-hand cursor. A plain figure passes
+/// `false` and stays inert — no hover state that promises an action.
 pub fn stat_tile(
     ui: &mut Ui,
     t: &Tokens,
@@ -2163,6 +2241,7 @@ pub fn stat_tile(
     value: &str,
     highlighted: bool,
     width: f32,
+    clickable: bool,
 ) -> Response {
     let cap = elided(
         ui,
@@ -2179,15 +2258,39 @@ pub fn stat_tile(
         width - 20.0,
     );
     let h = 10.0 + cap.size().y + 2.0 + val.size().y + 10.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, h), Sense::hover());
-    let (fill, border) = if highlighted {
+    let sense = if clickable {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(vec2(width, h), sense);
+    let (hv, pressed) = if clickable {
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
         (
-            t.accent_soft.gamma_multiply(0.75),
-            Some(t.accent.gamma_multiply(0.45)),
+            hover_t(ui, response.id, response.hovered()),
+            response.is_pointer_button_down_on(),
+        )
+    } else {
+        (0.0, false)
+    };
+    let (mut fill, border) = if highlighted {
+        (
+            lerp_color(t.accent_soft.gamma_multiply(0.75), t.accent_soft, hv),
+            Some(t.accent.gamma_multiply(0.45 + 0.35 * hv)),
+        )
+    } else if hv > 0.001 {
+        (
+            lerp_color(t.card, t.card_hover, hv),
+            Some(t.border.gamma_multiply(hv)),
         )
     } else {
         (t.card, None)
     };
+    if pressed {
+        fill = lerp_color(fill, t.bg, 0.35);
+    }
     ui.painter().rect_filled(rect, t.rounding_sm(), fill);
     if let Some(b) = border {
         ui.painter().rect_stroke(
@@ -2249,6 +2352,52 @@ pub fn tab_header(
             add_actions(ui);
         });
     });
+}
+
+/// One full-width toolbar row, `height` tall, every control on one vertical
+/// centre line: `add_left` lays out left-to-right from the left edge
+/// (filter chips, a filter field), `add_right` right-to-left from the right
+/// edge — the first control added is the right-most (the primary action).
+/// Both groups space their controls by `t.space_2`.
+///
+/// The right group is laid out first and keeps its full width; the left
+/// group gets what is left (minus a `t.space_4` gap) and is clipped to it,
+/// so a field sized from `ui.available_width()` there is what shrinks when
+/// the row narrows. Give every control the same `height` (34 matches
+/// [`search_field`], [`NumberInputStyle::Field`] and 34 px buttons).
+pub fn toolbar(
+    ui: &mut Ui,
+    t: &Tokens,
+    height: f32,
+    add_left: impl FnOnce(&mut Ui),
+    add_right: impl FnOnce(&mut Ui),
+) -> Response {
+    let (row, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    let clip = row.intersect(ui.clip_rect());
+    let mut right = ui.new_child(
+        UiBuilder::new()
+            .max_rect(row)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    right.set_clip_rect(clip);
+    right.spacing_mut().item_spacing.x = t.space_2;
+    add_right(&mut right);
+    let right_left = if right.min_rect().width() > 0.0 {
+        right.min_rect().left() - t.space_4
+    } else {
+        row.right()
+    };
+    let left_rect = Rect::from_min_max(row.min, pos2(right_left.max(row.left()), row.bottom()));
+    let mut left = ui.new_child(
+        UiBuilder::new()
+            .max_rect(left_rect)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    left.set_clip_rect(left_rect.intersect(clip));
+    left.spacing_mut().item_spacing.x = t.space_2;
+    add_left(&mut left);
+    response
 }
 
 // ---------------------------------------------------------------------------
@@ -4310,7 +4459,8 @@ pub enum NumberInputStyle {
     /// (a BOM line quantity). 28 px tall.
     Inline,
     /// An always-bordered form field — a toolbar setting ("Boards").
-    /// 32 px tall.
+    /// 34 px tall, the height of [`search_field`] / [`text_input`] and a
+    /// toolbar's 34 px buttons, so it lines up in a [`toolbar`] row.
     Field,
 }
 
@@ -4339,7 +4489,7 @@ pub fn number_input(
     let buf_id = id.with("number_input_buf");
     let height = match style {
         NumberInputStyle::Inline => 28.0,
-        NumberInputStyle::Field => 32.0,
+        NumberInputStyle::Field => 34.0,
     };
     let (rect, frame_resp) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let focused = ui.memory(|m| m.has_focus(id));
@@ -4618,10 +4768,118 @@ mod data_table_tests {
             DataColumn::new("b", ColumnWidth::Flex(50.0)),
             DataColumn::new("c", ColumnWidth::Flex(150.0)),
         ];
-        let w = column_widths(&cols, 500.0);
+        let w = column_widths(&cols, &[], 500.0);
         assert_eq!(w, vec![100.0, 100.0, 300.0]);
         // Narrower than the fixed + minimums: minimums hold (content clips).
-        let w = column_widths(&cols, 200.0);
+        let w = column_widths(&cols, &[], 200.0);
         assert_eq!(w, vec![100.0, 50.0, 150.0]);
+    }
+
+    #[test]
+    fn toolbar_controls_share_one_centre_line_and_the_left_field_shrinks() {
+        let ctx = egui::Context::default();
+        let t = Tokens::dark();
+        let mut fonts = egui::FontDefinitions::default();
+        crate::theme::add_phosphor(&mut fonts);
+        ctx.set_fonts(fonts);
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+        let mut widths = Vec::new();
+        for width in [900.0_f32, 520.0] {
+            let (mut chip, mut field, mut field_w) = (Rect::NOTHING, Rect::NOTHING, 0.0);
+            let (mut add, mut more, mut boards) = (Rect::NOTHING, Rect::NOTHING, Rect::NOTHING);
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, 200.0))),
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                let mut q = String::new();
+                toolbar(
+                    ui,
+                    &t,
+                    34.0,
+                    |ui| {
+                        chip = filter_chip(ui, &t, "All", Some(7), true, None, 34.0).rect;
+                        field_w = ui.available_width().min(280.0);
+                        field = search_field(ui, &t, "tb_q", &mut q, "Filter", field_w).rect;
+                    },
+                    |ui| {
+                        add = text_button(ui, &t, ButtonKind::Primary, "Add part", 34.0).rect;
+                        more = icon_text_button(ui, &t, ButtonKind::Secondary, "x", "", 34.0).rect;
+                        // The inner text edit's rect: centred in the 34 px field.
+                        boards =
+                            number_input(ui, &t, "tb_n", 1, 1, 9, 64.0, NumberInputStyle::Field)
+                                .response
+                                .rect;
+                    },
+                );
+            });
+            let cy = chip.center().y;
+            for r in [chip, field, add, more, boards] {
+                assert!((r.center().y - cy).abs() < 0.5, "{r:?} off the centre line");
+            }
+            // (`search_field` / `number_input` report their inner text
+            // edit, centred in a 34 px frame; the rest are the control.)
+            for r in [chip, add, more] {
+                assert!((r.height() - 34.0).abs() < 0.5, "{r:?} not 34 tall");
+            }
+            // The "⋯" is a square button.
+            assert!((more.width() - 34.0).abs() < 0.5);
+            // The field (chip, gap, then `field_w` wide) never runs under
+            // the right-hand group, and is what gives way when narrow.
+            let right_start = [add, more, boards]
+                .iter()
+                .map(|r| r.left())
+                .fold(f32::MAX, f32::min);
+            let field_right = chip.right() + t.space_2 + field_w;
+            assert!(
+                field_right <= right_start - t.space_4 + 0.5,
+                "field ends at {field_right}, right group starts at {right_start}"
+            );
+            widths.push(field_w);
+        }
+        assert_eq!(widths[0], 280.0);
+        assert!(widths[1] < 280.0, "the field shrinks first: {widths:?}");
+    }
+
+    #[test]
+    fn a_column_is_never_narrower_than_its_header_needs() {
+        let cols = [
+            DataColumn::new("a", ColumnWidth::Fixed(60.0)),
+            DataColumn::new("b", ColumnWidth::Flex(50.0)),
+            DataColumn::new("c", ColumnWidth::Fixed(100.0)),
+        ];
+        // A 60 px fixed column whose caption needs 72 grows to 72; the flex
+        // column's minimum rises to its caption too and it absorbs the rest.
+        let w = column_widths(&cols, &[72.0, 90.0, 40.0], 400.0);
+        assert_eq!(w, vec![72.0, 228.0, 100.0]);
+        let w = column_widths(&cols, &[72.0, 90.0, 40.0], 100.0);
+        assert_eq!(w, vec![72.0, 90.0, 100.0]);
+    }
+
+    #[test]
+    fn headers_fit_their_columns_in_a_rendered_table() {
+        // "Priced" in a 60 px column with 14 px cell padding used to render
+        // as "RICED": the caption was clipped to the 32 px inner rect.
+        let ctx = egui::Context::default();
+        let t = Tokens::dark();
+        let mut checked = false;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let cols = [
+                DataColumn::new("Distributor", ColumnWidth::Flex(110.0)).unsorted(),
+                DataColumn::numeric("Unit @2500", ColumnWidth::Fixed(60.0)).unsorted(),
+                DataColumn::numeric("Priced", ColumnWidth::Fixed(60.0)).unsorted(),
+            ];
+            let need = header_min_widths(ui, &t, &cols, 14.0);
+            let widths = column_widths(&cols, &need, 420.0);
+            for (col, (w, n)) in cols.iter().zip(widths.iter().zip(&need)) {
+                // The caption's own width fits inside the padded cell.
+                let g = ui.fonts_mut(|f| f.layout_job(caption_job(col.label, t.text_2)));
+                assert!(*w - 28.0 + 0.5 >= g.size().x, "{} clips", col.label);
+                assert!(*w >= *n);
+            }
+            assert!(widths[2] > 60.0, "\"Priced\" needed more than 60 px");
+            checked = true;
+        });
+        assert!(checked);
     }
 }

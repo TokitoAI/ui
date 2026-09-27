@@ -106,7 +106,7 @@ All live in `tokito_ui::components` (aliased `c` above). Each takes
 | `new_tile` | `new_tile(ui, t, label, sublabel, size) -> Response` | A dashed "create new …" tile. |
 | `icon_button` | `icon_button(ui, t, glyph, side) -> Response` | A square, frameless icon button. |
 | `text_button` | `text_button(ui, t, kind, label, height) -> Response` | A text button — `ButtonKind::Primary` / `Secondary`. |
-| `icon_text_button` | `icon_text_button(ui, t, kind, icon, label, height) -> Response` | `text_button` with a leading Phosphor glyph. |
+| `icon_text_button` | `icon_text_button(ui, t, kind, icon, label, height) -> Response` | `text_button` with a leading Phosphor glyph. An empty `label` makes it a square `height × height` glyph-only button (a toolbar's "⋯"). |
 | `link` | `link(ui, t, label) -> Response` | An inline accent-coloured text link. |
 | `badge` | `badge(ui, t, text) -> Response` | A small bordered count / status pill. |
 | `list_row` | `list_row(ui, t, job, selected) -> Response` | A full-width, left-aligned, hover-highlighted row. |
@@ -116,6 +116,8 @@ All live in `tokito_ui::components` (aliased `c` above). Each takes
 | `toggle` | `toggle(ui, t, &mut bool, label) -> Response` | An animated switch with a trailing label. |
 | `menu_button` | `menu_button(ui, t, id_source, glyph, side, \|ui\| …)` | A kebab trigger that opens a popup of `menu_item`s. |
 | `menu_item` | `menu_item(ui, t, glyph, label) -> bool` | One row of a `menu_button` popup. |
+| `popup_menu` | `popup_menu(&trigger, id_source, \|ui\| …)` | Attach a `menu_button`-style popup of `menu_item`s to any trigger response. |
+| `toolbar` | `toolbar(ui, t, height, \|ui\| left…, \|ui\| right…) -> Response` | One full-width row, every control on one centre line: a left group (chips, a filter field that shrinks first) and a right-to-left action group. |
 | `modal` | `modal(ctx, t, &mut bool, title, width, \|ui\| …)` | A centred dialog over a dimmed backdrop. |
 | `page_header` | `page_header(ui, t, title, subtitle)` | A large title over a muted subtitle. |
 | `section_header` | `section_header(ui, t, title, action) -> Option<Response>` | An `h2` with an optional right-aligned action link. |

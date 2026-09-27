@@ -25,7 +25,7 @@ src/
 ```
 
 **Components** (`components.rs`): `card`, `new_tile`, `icon_button`,
-`text_button`, `icon_text_button`, `link`, `badge`, `menu_button`, `menu_item`,
+`text_button`, `icon_text_button`, `link`, `badge`, `menu_button`, `popup_menu`, `menu_item`,
 `list_row`, `text_input`, `search_field`, `secret_input`, `toggle`, `modal`,
 `page_header`, `section_header`, `nav_item`, `checkbox`, `segmented`,
 `select`, `select_option`, `banner`, `collapsing`, `cad_tool_button`
@@ -35,7 +35,7 @@ src/
 `gate_overlay`, `status_badge`, `skeleton`, `spinner`, `number_input`,
 `result_row`, `action_banner`, `empty_panel`, `status_dot`, `accent_badge`,
 `cell_text` (+ `CellText`), `caption_label`, `filter_chip`, `side_sheet`,
-`label_tile`, `stat_tile`, `flush_card`, `tab_header`; `data_table` is a
+`label_tile`, `stat_tile`, `flush_card`, `tab_header`, `toolbar`; `data_table` is a
 self-laid-out grid taking `DataColumn` descriptors (label,
 `ColumnWidth::{Fixed,Flex}`, numeric alignment, sortable) and `DataTable`
 options (row tones, selection, framed/unframed, scroll, footer), returning
