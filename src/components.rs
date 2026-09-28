@@ -2524,6 +2524,37 @@ pub fn chat_bubble(
     });
 }
 
+/// A right-anchored user message that hugs short text and wraps long text.
+///
+/// Unlike the generic [`chat_bubble`] composition surface, this primitive
+/// owns text measurement so a short prompt does not expand to the desktop
+/// width. It grows with its content until the smaller of 72% of the host row
+/// or 880 px, then wraps. The user avatar stays on the trailing edge.
+pub fn chat_user_message(ui: &mut Ui, t: &Tokens, text: &str) {
+    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+        chat_avatar(ui, t, BubbleKind::User, "");
+        ui.add_space(t.space_3);
+
+        let horizontal_margin = t.space_4;
+        let max_outer_width = (ui.available_width() * 0.72).min(880.0);
+        let max_text_width = (max_outer_width - horizontal_margin * 2.0).max(1.0);
+        let font_id = TextStyle::Body.resolve(ui.style());
+        let galley =
+            ui.fonts_mut(|fonts| fonts.layout(text.to_owned(), font_id, t.text, max_text_width));
+
+        egui::Frame::new()
+            .fill(t.chat_bubble_bg_user)
+            .corner_radius(egui::CornerRadius::same(16))
+            .inner_margin(egui::Margin::symmetric(
+                horizontal_margin as i8,
+                t.space_3 as i8,
+            ))
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(galley).selectable(true));
+            });
+    });
+}
+
 /// Quiet, readable transcript metadata for tool activity and system events.
 /// Unlike a chat bubble this is deliberately low-chrome, but it keeps the
 /// same avatar gutter so the transcript reads as one aligned conversation.
