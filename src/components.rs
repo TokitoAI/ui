@@ -2405,8 +2405,8 @@ pub enum BubbleKind {
 }
 
 /// Avatar disc shown next to a [`chat_bubble`]. The assistant variant paints
-/// a sparkle glyph; the user variant paints up to two initial letters.
-pub fn chat_avatar(ui: &mut Ui, t: &Tokens, kind: BubbleKind, initials: &str) -> Response {
+/// a sparkle glyph; the user variant paints a person glyph.
+pub fn chat_avatar(ui: &mut Ui, t: &Tokens, kind: BubbleKind, _initials: &str) -> Response {
     let side = 28.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
     let (fill, ink, glyph_size) = match kind {
@@ -2425,12 +2425,11 @@ pub fn chat_avatar(ui: &mut Ui, t: &Tokens, kind: BubbleKind, initials: &str) ->
             );
         }
         BubbleKind::User => {
-            let label = initials.chars().take(2).collect::<String>().to_uppercase();
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                &label,
-                TextStyle::Small.resolve(ui.style()),
+                icons::ph::USER,
+                icons::font(glyph_size),
                 ink,
             );
         }
@@ -2466,8 +2465,8 @@ pub fn icon_avatar(ui: &mut Ui, t: &Tokens, glyph: &str, diameter: f32) -> Respo
 /// stacked widgets (tool-call cards, mutation cards). The bubble grows to
 /// fit; the caller controls the column width via the surrounding `Ui`.
 ///
-/// `initials` is used by the user-kind avatar; pass an empty string for the
-/// assistant kind.
+/// `initials` is retained for API compatibility; user bubbles render the
+/// shared person glyph so identity remains recognizable at small sizes.
 pub fn chat_bubble(
     ui: &mut Ui,
     t: &Tokens,
@@ -2480,10 +2479,8 @@ pub fn chat_bubble(
         BubbleKind::User => Layout::right_to_left(Align::Min),
     };
     ui.with_layout(layout, |ui| {
-        if kind != BubbleKind::User {
-            chat_avatar(ui, t, kind, initials);
-            ui.add_space(t.space_3);
-        }
+        chat_avatar(ui, t, kind, initials);
+        ui.add_space(t.space_3);
         let fill = match kind {
             BubbleKind::Assistant => Color32::TRANSPARENT,
             BubbleKind::AssistantPanel => t.chat_bubble_bg,
@@ -2501,23 +2498,29 @@ pub fn chat_bubble(
             }
             BubbleKind::User => egui::Margin::symmetric((t.space_4) as i8, (t.space_3) as i8),
         };
-        egui::Frame::new()
-            .fill(fill)
-            .stroke(stroke)
-            .corner_radius(if kind == BubbleKind::User {
-                egui::CornerRadius::same(16)
-            } else {
-                t.rounding_md()
-            })
-            .inner_margin(margin)
-            .show(ui, |ui| {
-                // The outer user row is right-to-left only to anchor the
-                // bubble. Message content itself must retain normal
-                // left-to-right reading order and left alignment. Width is
-                // deliberately host-owned: desktop workbenches can use their
-                // full canvas while narrower hosts naturally constrain it.
-                ui.with_layout(Layout::top_down(Align::Min), body);
-            });
+        let max_bubble_width = if kind == BubbleKind::User {
+            (ui.available_width() * 0.72).min(880.0)
+        } else {
+            ui.available_width()
+        };
+        ui.scope(|ui| {
+            ui.set_max_width(max_bubble_width);
+            egui::Frame::new()
+                .fill(fill)
+                .stroke(stroke)
+                .corner_radius(if kind == BubbleKind::User {
+                    egui::CornerRadius::same(16)
+                } else {
+                    t.rounding_md()
+                })
+                .inner_margin(margin)
+                .show(ui, |ui| {
+                    // The outer user row is right-to-left only to anchor the
+                    // bubble. Message content itself retains normal
+                    // left-to-right reading order and left alignment.
+                    ui.with_layout(Layout::top_down(Align::Min), body);
+                });
+        });
     });
 }
 
