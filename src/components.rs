@@ -2512,12 +2512,15 @@ pub fn chat_bubble(
             .inner_margin(margin)
             .show(ui, |ui| {
                 let max_width = match kind {
-                    BubbleKind::Assistant => 720.0,
-                    BubbleKind::AssistantPanel => 760.0,
-                    BubbleKind::User => 620.0,
+                    BubbleKind::Assistant => 1_040.0,
+                    BubbleKind::AssistantPanel => 1_160.0,
+                    BubbleKind::User => 1_040.0,
                 };
                 ui.set_max_width(ui.available_width().min(max_width));
-                body(ui);
+                // The outer user row is right-to-left only to anchor the
+                // bubble. Message content itself must retain normal
+                // left-to-right reading order and left alignment.
+                ui.with_layout(Layout::top_down(Align::Min), body);
             });
     });
 }
