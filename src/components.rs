@@ -2398,6 +2398,9 @@ fn tab_pill(ui: &mut Ui, t: &Tokens, icon: &str, label: &str, selected: bool) ->
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BubbleKind {
     Assistant,
+    /// Structured assistant content that needs a contained surface, such as
+    /// an engineering plan or an approval gate.
+    AssistantPanel,
     User,
 }
 
@@ -2407,12 +2410,12 @@ pub fn chat_avatar(ui: &mut Ui, t: &Tokens, kind: BubbleKind, initials: &str) ->
     let side = 28.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
     let (fill, ink, glyph_size) = match kind {
-        BubbleKind::Assistant => (t.chat_avatar_bg, t.accent, 14.0),
+        BubbleKind::Assistant | BubbleKind::AssistantPanel => (t.chat_avatar_bg, t.accent, 14.0),
         BubbleKind::User => (t.chat_avatar_bg_user, t.text, 12.0),
     };
     ui.painter().circle_filled(rect.center(), side * 0.5, fill);
     match kind {
-        BubbleKind::Assistant => {
+        BubbleKind::Assistant | BubbleKind::AssistantPanel => {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -2473,24 +2476,65 @@ pub fn chat_bubble(
     body: impl FnOnce(&mut Ui),
 ) {
     let layout = match kind {
-        BubbleKind::Assistant => Layout::left_to_right(Align::Min),
+        BubbleKind::Assistant | BubbleKind::AssistantPanel => Layout::left_to_right(Align::Min),
         BubbleKind::User => Layout::right_to_left(Align::Min),
     };
     ui.with_layout(layout, |ui| {
-        chat_avatar(ui, t, kind, initials);
-        ui.add_space(t.space_2);
+        if kind != BubbleKind::User {
+            chat_avatar(ui, t, kind, initials);
+            ui.add_space(t.space_3);
+        }
         let fill = match kind {
-            BubbleKind::Assistant => t.chat_bubble_bg,
+            BubbleKind::Assistant => Color32::TRANSPARENT,
+            BubbleKind::AssistantPanel => t.chat_bubble_bg,
             BubbleKind::User => t.chat_bubble_bg_user,
+        };
+        let stroke = if kind == BubbleKind::AssistantPanel {
+            Stroke::new(1.0, t.border)
+        } else {
+            Stroke::NONE
+        };
+        let margin = match kind {
+            BubbleKind::Assistant => egui::Margin::ZERO,
+            BubbleKind::AssistantPanel => {
+                egui::Margin::symmetric((t.space_4) as i8, (t.space_4) as i8)
+            }
+            BubbleKind::User => egui::Margin::symmetric((t.space_4) as i8, (t.space_3) as i8),
         };
         egui::Frame::new()
             .fill(fill)
-            .corner_radius(t.rounding_sm())
-            .inner_margin(egui::Margin::symmetric((14.0) as i8, (12.0) as i8))
+            .stroke(stroke)
+            .corner_radius(if kind == BubbleKind::User {
+                egui::CornerRadius::same(16)
+            } else {
+                t.rounding_md()
+            })
+            .inner_margin(margin)
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width().min(640.0));
+                let max_width = match kind {
+                    BubbleKind::Assistant => 720.0,
+                    BubbleKind::AssistantPanel => 760.0,
+                    BubbleKind::User => 620.0,
+                };
+                ui.set_max_width(ui.available_width().min(max_width));
                 body(ui);
             });
+    });
+}
+
+/// Quiet, readable transcript metadata for tool activity and system events.
+/// Unlike a chat bubble this is deliberately low-chrome, but it keeps the
+/// same avatar gutter so the transcript reads as one aligned conversation.
+pub fn chat_event(ui: &mut Ui, t: &Tokens, glyph: &str, text: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(40.0);
+        ui.label(icons::icon(glyph, 13.0, t.text_3));
+        ui.add_space(t.space_1);
+        ui.add(
+            egui::Label::new(RichText::new(text).size(13.0).color(t.text_2))
+                .wrap()
+                .selectable(false),
+        );
     });
 }
 
@@ -2512,7 +2556,7 @@ pub fn chat_activity(
 ) {
     ui.ctx().request_repaint_after(Duration::from_millis(50));
     ui.push_id(id_source, |ui| {
-        chat_bubble(ui, t, BubbleKind::Assistant, "", |ui| {
+        chat_bubble(ui, t, BubbleKind::AssistantPanel, "", |ui| {
             let available = ui.available_width().max(0.0);
             let content_width = if available < 240.0 {
                 available
@@ -2597,21 +2641,21 @@ pub fn chat_composer(
     egui::Frame::new()
         .fill(t.card)
         .stroke(Stroke::new(1.0, t.border))
-        .corner_radius(t.rounding_md())
+        .corner_radius(16.0)
         .inner_margin(egui::Margin::symmetric(
             (t.space_4) as i8,
             (t.space_3) as i8,
         ))
         .show(ui, |ui| {
             ui.with_layout(Layout::left_to_right(Align::Max), |ui| {
-                let send_side = 40.0;
-                let editor_height = 64.0;
+                let send_side = 36.0;
+                let editor_height = 44.0;
                 let composer_w = (ui.available_width() - send_side - t.space_3).max(0.0);
                 let resp = ui.add_sized(
                     [composer_w, editor_height],
                     egui::TextEdit::multiline(&mut state.text)
                         .frame(egui::Frame::NONE)
-                        .desired_rows(3)
+                        .desired_rows(2)
                         .hint_text(hint),
                 );
 
@@ -2666,7 +2710,7 @@ fn send_button(ui: &mut Ui, t: &Tokens, glyph: &str, side: f32, enabled: bool) -
     } else {
         t.text_disabled
     };
-    ui.painter().rect_filled(rect, t.rounding_sm(), fill);
+    ui.painter().circle_filled(rect.center(), side * 0.5, fill);
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
