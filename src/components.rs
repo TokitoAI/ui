@@ -609,8 +609,15 @@ pub fn modal(
     }
 
     // The dialog itself, centred, above the backdrop.
+    // Keep the dialog in a strictly higher order than its full-screen
+    // backdrop. Two Areas in the same order rely on retained interaction
+    // ordering; after an Escape frame (which intentionally renders neither
+    // Area), reopening could restore the backdrop above the visible dialog
+    // and make every control click-dead. `Tooltip` is egui's top normal UI
+    // order (below Debug), so popups owned by controls can still participate
+    // while the modal itself always wins over the Foreground backdrop.
     egui::Area::new(egui::Id::new(("tokito_ui_modal", title)))
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Tooltip)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, -20.0])
         .show(ctx, |ui| {
             egui::Frame::new()
@@ -2962,6 +2969,74 @@ mod toast_stack_tests {
     }
 }
 
+#[cfg(test)]
+mod modal_tests {
+    use super::*;
+    use egui_kittest::{kittest::Queryable, Harness};
+
+    #[derive(Default)]
+    struct ModalApp {
+        open: bool,
+        clicks: usize,
+        button_center: Option<egui::Pos2>,
+        dialog_is_top_layer: bool,
+    }
+
+    impl eframe::App for ModalApp {
+        fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+            let ctx = ui.ctx();
+            let tokens = Tokens::dark();
+            crate::theme::apply(ctx, &tokens);
+            modal(ctx, &tokens, &mut self.open, "Settings", 360.0, |ui| {
+                let response = ui.button("Interactive setting");
+                self.button_center = Some(response.rect.center());
+                if response.clicked() {
+                    self.clicks += 1;
+                }
+            });
+            if let Some(pos) = self.button_center {
+                self.dialog_is_top_layer = ctx.layer_id_at(pos)
+                    == Some(egui::LayerId::new(
+                        egui::Order::Tooltip,
+                        egui::Id::new(("tokito_ui_modal", "Settings")),
+                    ));
+            }
+        }
+    }
+
+    /// TokitoAI/tokito#785: Escape must not leave retained Area ordering in
+    /// a state where the next modal instance is visible but its controls are
+    /// covered by the full-screen backdrop.
+    #[test]
+    fn modal_controls_remain_clickable_after_escape_and_reopen() {
+        let mut harness = Harness::builder().build_eframe(|cc| {
+            let mut fonts = egui::FontDefinitions::default();
+            crate::theme::add_phosphor(&mut fonts);
+            cc.egui_ctx.set_fonts(fonts);
+            ModalApp {
+                open: true,
+                clicks: 0,
+                button_center: None,
+                dialog_is_top_layer: false,
+            }
+        });
+        harness.run();
+
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert!(!harness.state().open);
+
+        harness.state_mut().open = true;
+        harness.run();
+        harness.get_by_label("Interactive setting").click();
+        harness.run();
+
+        assert_eq!(harness.state().clicks, 1);
+        assert!(harness.state().open);
+        assert!(harness.state().dialog_is_top_layer);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // chip
 // ---------------------------------------------------------------------------
@@ -3424,21 +3499,24 @@ fn tab_pill(ui: &mut Ui, t: &Tokens, icon: &str, label: &str, selected: bool) ->
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BubbleKind {
     Assistant,
+    /// Structured assistant content that needs a contained surface, such as
+    /// an engineering plan or an approval gate.
+    AssistantPanel,
     User,
 }
 
 /// Avatar disc shown next to a [`chat_bubble`]. The assistant variant paints
-/// a sparkle glyph; the user variant paints up to two initial letters.
-pub fn chat_avatar(ui: &mut Ui, t: &Tokens, kind: BubbleKind, initials: &str) -> Response {
+/// a sparkle glyph; the user variant paints a person glyph.
+pub fn chat_avatar(ui: &mut Ui, t: &Tokens, kind: BubbleKind, _initials: &str) -> Response {
     let side = 28.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
     let (fill, ink, glyph_size) = match kind {
-        BubbleKind::Assistant => (t.chat_avatar_bg, t.accent, 14.0),
+        BubbleKind::Assistant | BubbleKind::AssistantPanel => (t.chat_avatar_bg, t.accent, 14.0),
         BubbleKind::User => (t.chat_avatar_bg_user, t.text, 12.0),
     };
     ui.painter().circle_filled(rect.center(), side * 0.5, fill);
     match kind {
-        BubbleKind::Assistant => {
+        BubbleKind::Assistant | BubbleKind::AssistantPanel => {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -3448,12 +3526,11 @@ pub fn chat_avatar(ui: &mut Ui, t: &Tokens, kind: BubbleKind, initials: &str) ->
             );
         }
         BubbleKind::User => {
-            let label = initials.chars().take(2).collect::<String>().to_uppercase();
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                &label,
-                TextStyle::Small.resolve(ui.style()),
+                icons::ph::USER,
+                icons::font(glyph_size),
                 ink,
             );
         }
@@ -3489,8 +3566,8 @@ pub fn icon_avatar(ui: &mut Ui, t: &Tokens, glyph: &str, diameter: f32) -> Respo
 /// stacked widgets (tool-call cards, mutation cards). The bubble grows to
 /// fit; the caller controls the column width via the surrounding `Ui`.
 ///
-/// `initials` is used by the user-kind avatar; pass an empty string for the
-/// assistant kind.
+/// `initials` is retained for API compatibility; user bubbles render the
+/// shared person glyph so identity remains recognizable at small sizes.
 pub fn chat_bubble(
     ui: &mut Ui,
     t: &Tokens,
@@ -3499,24 +3576,99 @@ pub fn chat_bubble(
     body: impl FnOnce(&mut Ui),
 ) {
     let layout = match kind {
-        BubbleKind::Assistant => Layout::left_to_right(Align::Min),
+        BubbleKind::Assistant | BubbleKind::AssistantPanel => Layout::left_to_right(Align::Min),
         BubbleKind::User => Layout::right_to_left(Align::Min),
     };
     ui.with_layout(layout, |ui| {
         chat_avatar(ui, t, kind, initials);
-        ui.add_space(t.space_2);
+        ui.add_space(t.space_3);
         let fill = match kind {
-            BubbleKind::Assistant => t.chat_bubble_bg,
+            BubbleKind::Assistant => Color32::TRANSPARENT,
+            BubbleKind::AssistantPanel => t.chat_bubble_bg,
             BubbleKind::User => t.chat_bubble_bg_user,
         };
+        let stroke = if kind == BubbleKind::AssistantPanel {
+            Stroke::new(1.0, t.border)
+        } else {
+            Stroke::NONE
+        };
+        let margin = match kind {
+            BubbleKind::Assistant => egui::Margin::ZERO,
+            BubbleKind::AssistantPanel => {
+                egui::Margin::symmetric((t.space_4) as i8, (t.space_4) as i8)
+            }
+            BubbleKind::User => egui::Margin::symmetric((t.space_4) as i8, (t.space_3) as i8),
+        };
+        let max_bubble_width = if kind == BubbleKind::User {
+            (ui.available_width() * 0.72).min(880.0)
+        } else {
+            ui.available_width()
+        };
+        ui.scope(|ui| {
+            ui.set_max_width(max_bubble_width);
+            egui::Frame::new()
+                .fill(fill)
+                .stroke(stroke)
+                .corner_radius(if kind == BubbleKind::User {
+                    egui::CornerRadius::same(16)
+                } else {
+                    t.rounding_md()
+                })
+                .inner_margin(margin)
+                .show(ui, |ui| {
+                    // The outer user row is right-to-left only to anchor the
+                    // bubble. Message content itself retains normal
+                    // left-to-right reading order and left alignment.
+                    ui.with_layout(Layout::top_down(Align::Min), body);
+                });
+        });
+    });
+}
+
+/// A right-anchored user message that hugs short text and wraps long text.
+///
+/// Unlike the generic [`chat_bubble`] composition surface, this primitive
+/// owns text measurement so a short prompt does not expand to the desktop
+/// width. It grows with its content until the smaller of 72% of the host row
+/// or 880 px, then wraps. The user avatar stays on the trailing edge.
+pub fn chat_user_message(ui: &mut Ui, t: &Tokens, text: &str) {
+    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+        chat_avatar(ui, t, BubbleKind::User, "");
+        ui.add_space(t.space_3);
+
+        let horizontal_margin = t.space_4;
+        let max_outer_width = (ui.available_width() * 0.72).min(880.0);
+        let max_text_width = (max_outer_width - horizontal_margin * 2.0).max(1.0);
+        let font_id = TextStyle::Body.resolve(ui.style());
+        let galley =
+            ui.fonts_mut(|fonts| fonts.layout(text.to_owned(), font_id, t.text, max_text_width));
+
         egui::Frame::new()
-            .fill(fill)
-            .corner_radius(t.rounding_sm())
-            .inner_margin(egui::Margin::symmetric((14.0) as i8, (12.0) as i8))
+            .fill(t.chat_bubble_bg_user)
+            .corner_radius(egui::CornerRadius::same(16))
+            .inner_margin(egui::Margin::symmetric(
+                horizontal_margin as i8,
+                t.space_3 as i8,
+            ))
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width().min(640.0));
-                body(ui);
+                ui.add(egui::Label::new(galley).selectable(true));
             });
+    });
+}
+
+/// Quiet, readable transcript metadata for tool activity and system events.
+/// Unlike a chat bubble this is deliberately low-chrome, but it keeps the
+/// same avatar gutter so the transcript reads as one aligned conversation.
+pub fn chat_event(ui: &mut Ui, t: &Tokens, glyph: &str, text: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(40.0);
+        ui.label(icons::icon(glyph, 13.0, t.text_3));
+        ui.add_space(t.space_1);
+        ui.add(
+            egui::Label::new(RichText::new(text).size(13.0).color(t.text_2))
+                .wrap()
+                .selectable(false),
+        );
     });
 }
 
@@ -3538,7 +3690,7 @@ pub fn chat_activity(
 ) {
     ui.ctx().request_repaint_after(Duration::from_millis(50));
     ui.push_id(id_source, |ui| {
-        chat_bubble(ui, t, BubbleKind::Assistant, "", |ui| {
+        chat_bubble(ui, t, BubbleKind::AssistantPanel, "", |ui| {
             let available = ui.available_width().max(0.0);
             let content_width = if available < 240.0 {
                 available
@@ -3607,6 +3759,11 @@ pub enum ComposerAction {
 /// buffer and returns the submitted string in `ComposerAction::Submit`. While
 /// `state.streaming` is `true`, the trailing button paints as a Stop glyph
 /// and Enter no longer submits — clicking emits `ComposerAction::Stop`.
+///
+/// The three-line editing area and bottom-aligned 40 px action keep long
+/// engineering prompts readable without turning the composer into a thin
+/// single-line strip. Its height is intentionally stable while typing so the
+/// transcript does not jump on every wrapped line.
 pub fn chat_composer(
     ui: &mut Ui,
     t: &Tokens,
@@ -3618,20 +3775,21 @@ pub fn chat_composer(
     egui::Frame::new()
         .fill(t.card)
         .stroke(Stroke::new(1.0, t.border))
-        .corner_radius(t.rounding_md())
+        .corner_radius(16.0)
         .inner_margin(egui::Margin::symmetric(
+            (t.space_4) as i8,
             (t.space_3) as i8,
-            (t.space_2) as i8,
         ))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.with_layout(Layout::left_to_right(Align::Max), |ui| {
                 let send_side = 36.0;
-                let composer_w = (ui.available_width() - send_side - t.space_2).max(0.0);
+                let editor_height = 44.0;
+                let composer_w = (ui.available_width() - send_side - t.space_3).max(0.0);
                 let resp = ui.add_sized(
-                    [composer_w, 0.0],
+                    [composer_w, editor_height],
                     egui::TextEdit::multiline(&mut state.text)
                         .frame(egui::Frame::NONE)
-                        .desired_rows(1)
+                        .desired_rows(2)
                         .hint_text(hint),
                 );
 
@@ -3648,7 +3806,7 @@ pub fn chat_composer(
                     action = Some(ComposerAction::Submit(submitted.trim().to_string()));
                 }
 
-                ui.add_space(t.space_2);
+                ui.add_space(t.space_3);
                 // Send / Stop button.
                 let (glyph, enabled) = if state.streaming {
                     (icons::ph::STOP, true)
@@ -3686,7 +3844,7 @@ fn send_button(ui: &mut Ui, t: &Tokens, glyph: &str, side: f32, enabled: bool) -
     } else {
         t.text_disabled
     };
-    ui.painter().rect_filled(rect, t.rounding_sm(), fill);
+    ui.painter().circle_filled(rect.center(), side * 0.5, fill);
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
