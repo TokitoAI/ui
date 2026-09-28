@@ -2581,6 +2581,11 @@ pub enum ComposerAction {
 /// buffer and returns the submitted string in `ComposerAction::Submit`. While
 /// `state.streaming` is `true`, the trailing button paints as a Stop glyph
 /// and Enter no longer submits — clicking emits `ComposerAction::Stop`.
+///
+/// The three-line editing area and bottom-aligned 40 px action keep long
+/// engineering prompts readable without turning the composer into a thin
+/// single-line strip. Its height is intentionally stable while typing so the
+/// transcript does not jump on every wrapped line.
 pub fn chat_composer(
     ui: &mut Ui,
     t: &Tokens,
@@ -2594,18 +2599,19 @@ pub fn chat_composer(
         .stroke(Stroke::new(1.0, t.border))
         .corner_radius(t.rounding_md())
         .inner_margin(egui::Margin::symmetric(
+            (t.space_4) as i8,
             (t.space_3) as i8,
-            (t.space_2) as i8,
         ))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let send_side = 36.0;
-                let composer_w = (ui.available_width() - send_side - t.space_2).max(0.0);
+            ui.with_layout(Layout::left_to_right(Align::Max), |ui| {
+                let send_side = 40.0;
+                let editor_height = 64.0;
+                let composer_w = (ui.available_width() - send_side - t.space_3).max(0.0);
                 let resp = ui.add_sized(
-                    [composer_w, 0.0],
+                    [composer_w, editor_height],
                     egui::TextEdit::multiline(&mut state.text)
                         .frame(egui::Frame::NONE)
-                        .desired_rows(1)
+                        .desired_rows(3)
                         .hint_text(hint),
                 );
 
@@ -2622,7 +2628,7 @@ pub fn chat_composer(
                     action = Some(ComposerAction::Submit(submitted.trim().to_string()));
                 }
 
-                ui.add_space(t.space_2);
+                ui.add_space(t.space_3);
                 // Send / Stop button.
                 let (glyph, enabled) = if state.streaming {
                     (icons::ph::STOP, true)
