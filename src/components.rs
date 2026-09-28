@@ -2511,15 +2511,11 @@ pub fn chat_bubble(
             })
             .inner_margin(margin)
             .show(ui, |ui| {
-                let max_width = match kind {
-                    BubbleKind::Assistant => 1_040.0,
-                    BubbleKind::AssistantPanel => 1_160.0,
-                    BubbleKind::User => 1_040.0,
-                };
-                ui.set_max_width(ui.available_width().min(max_width));
                 // The outer user row is right-to-left only to anchor the
                 // bubble. Message content itself must retain normal
-                // left-to-right reading order and left alignment.
+                // left-to-right reading order and left alignment. Width is
+                // deliberately host-owned: desktop workbenches can use their
+                // full canvas while narrower hosts naturally constrain it.
                 ui.with_layout(Layout::top_down(Align::Min), body);
             });
     });
