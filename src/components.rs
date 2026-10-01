@@ -2638,6 +2638,19 @@ pub struct Toast {
     /// When this toast auto-expires. `None` means it sticks until the user
     /// dismisses it with the ✕ button (errors and warnings).
     until: Option<std::time::Instant>,
+    /// An optional one-click action: a button label plus an opaque tag the
+    /// caller chose. `toast_overlay` doesn't interpret the tag — it just
+    /// reports it back (see [`ToastActionClick`]) so the holder can carry
+    /// whatever it needs to undo/follow up (e.g. `"bom_undo_boards:<id>:4"`).
+    action: Option<(String, String)>,
+}
+
+/// Reported by [`toast_overlay`] when a toast's action button is clicked
+/// this frame — see [`ToastStack::push_with_action`].
+#[derive(Debug, Clone)]
+pub struct ToastActionClick {
+    pub toast_id: u64,
+    pub action_tag: String,
 }
 
 /// A queue of [`Toast`]s, drained by [`toast_overlay`].
@@ -2692,8 +2705,35 @@ impl ToastStack {
             message: message.into(),
             kind,
             until: Self::expiry(kind),
+            action: None,
         });
         self.enforce_capacity();
+    }
+
+    /// Push a toast with a one-click action button (e.g. "Undo"). The
+    /// `action_tag` is returned verbatim by `toast_overlay` through
+    /// [`ToastActionClick`] when the button is clicked, so the caller can
+    /// carry whatever state it needs to act on it — `toast_overlay` never
+    /// interprets it. The action button dismisses the toast when clicked.
+    /// Returns the new toast's id.
+    pub fn push_with_action(
+        &mut self,
+        message: impl Into<String>,
+        kind: ToastKind,
+        action_label: impl Into<String>,
+        action_tag: impl Into<String>,
+    ) -> u64 {
+        let id = self.alloc_id();
+        self.items.push(Toast {
+            id,
+            key: None,
+            message: message.into(),
+            kind,
+            until: Self::expiry(kind),
+            action: Some((action_label.into(), action_tag.into())),
+        });
+        self.enforce_capacity();
+        id
     }
 
     /// Upsert a **keyed** toast: if one with `key` already exists its message
@@ -2725,6 +2765,7 @@ impl ToastStack {
             message,
             kind,
             until: None,
+            action: None,
         });
         self.enforce_capacity();
     }
@@ -2803,10 +2844,14 @@ impl ToastStack {
 /// and egui is asked to repaint while a timed toast is still live so its
 /// auto-dismissal happens on time. Each toast shows a kind icon + title, the
 /// message, and a dismiss button.
-pub fn toast_overlay(ctx: &egui::Context, t: &Tokens, stack: &mut ToastStack) {
+pub fn toast_overlay(
+    ctx: &egui::Context,
+    t: &Tokens,
+    stack: &mut ToastStack,
+) -> Vec<ToastActionClick> {
     stack.prune();
     if stack.is_empty() {
-        return;
+        return Vec::new();
     }
 
     // Keep repainting only while a *timed* toast is live, so it vanishes on
@@ -2816,6 +2861,7 @@ pub fn toast_overlay(ctx: &egui::Context, t: &Tokens, stack: &mut ToastStack) {
     }
 
     let mut dismiss: Option<u64> = None;
+    let mut acted = Vec::new();
     egui::Area::new(egui::Id::new("tokito_ui_toasts"))
         .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
         .show(ctx, |ui| {
@@ -2849,6 +2895,20 @@ pub fn toast_overlay(ctx: &egui::Context, t: &Tokens, stack: &mut ToastStack) {
                                 egui::Label::new(RichText::new(&toast.message).color(t.text))
                                     .wrap(),
                             );
+                            if let Some((label, tag)) = &toast.action {
+                                ui.add_space(t.space_1);
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if text_button(ui, t, ButtonKind::Secondary, label, 26.0)
+                                        .clicked()
+                                    {
+                                        acted.push(ToastActionClick {
+                                            toast_id: toast.id,
+                                            action_tag: tag.clone(),
+                                        });
+                                        dismiss = Some(toast.id);
+                                    }
+                                });
+                            }
                         });
                     ui.add_space(t.space_2);
                 }
@@ -2858,6 +2918,7 @@ pub fn toast_overlay(ctx: &egui::Context, t: &Tokens, stack: &mut ToastStack) {
     if let Some(id) = dismiss {
         stack.items.retain(|toast| toast.id != id);
     }
+    acted
 }
 
 #[cfg(test)]
