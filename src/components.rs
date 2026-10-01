@@ -4711,11 +4711,12 @@ const NUMBER_INPUT_DEBOUNCE: std::time::Duration = std::time::Duration::from_mil
 /// The debounced auto-commit exists because blur alone isn't a reliable
 /// signal: a host that stops rendering this widget (e.g. switching away
 /// from the tab/page it lives on) never produces a `lost_focus` event, so a
-/// typed-but-uncommitted value used to simply vanish. After
-/// [`NUMBER_INPUT_DEBOUNCE`] of no new keystrokes it commits anyway, while
-/// the widget is still being drawn — it cannot fire once the host stops
-/// calling this function, so a switch within the debounce window can still
-/// lose a very recent keystroke, but every other case now survives.
+/// typed-but-uncommitted value used to simply vanish. After a short pause
+/// (`NUMBER_INPUT_DEBOUNCE`, an internal constant) of no new keystrokes it
+/// commits anyway, while the widget is still being drawn — it cannot fire
+/// once the host stops calling this function, so a switch within the
+/// debounce window can still lose a very recent keystroke, but every other
+/// case now survives.
 ///
 /// `id_source` must be stable and unique per row (e.g. `("bom_qty",
 /// line_id)`) — the edit buffer is keyed off it.
