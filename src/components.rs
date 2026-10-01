@@ -4694,14 +4694,28 @@ pub enum NumberInputStyle {
     Field,
 }
 
+/// How long a [`number_input`] waits after the last keystroke before
+/// auto-committing, even while still focused — see the debounce note on
+/// [`number_input`] itself.
+const NUMBER_INPUT_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(600);
+
 /// A compact, right-aligned integer field — inline table editing (a BOM
 /// quantity) or a small toolbar setting, per [`NumberInputStyle`].
 ///
 /// It edits a private text buffer while focused and only reports a value
-/// when the user **commits** — Enter or clicking away — so a caller can
-/// persist on commit without per-keystroke writes or a separate Save
-/// button. Escape reverts. Non-digits are ignored; the committed value is
-/// clamped to `min..=max`.
+/// when the user **commits** — Enter, clicking away, or (new) a short pause
+/// with no further keystrokes — so a caller can persist on commit without
+/// per-keystroke writes or a separate Save button. Escape reverts.
+/// Non-digits are ignored; the committed value is clamped to `min..=max`.
+///
+/// The debounced auto-commit exists because blur alone isn't a reliable
+/// signal: a host that stops rendering this widget (e.g. switching away
+/// from the tab/page it lives on) never produces a `lost_focus` event, so a
+/// typed-but-uncommitted value used to simply vanish. After
+/// [`NUMBER_INPUT_DEBOUNCE`] of no new keystrokes it commits anyway, while
+/// the widget is still being drawn — it cannot fire once the host stops
+/// calling this function, so a switch within the debounce window can still
+/// lose a very recent keystroke, but every other case now survives.
 ///
 /// `id_source` must be stable and unique per row (e.g. `("bom_qty",
 /// line_id)`) — the edit buffer is keyed off it.
@@ -4717,6 +4731,8 @@ pub fn number_input(
 ) -> NumberInputResponse {
     let id = egui::Id::new(id_source);
     let buf_id = id.with("number_input_buf");
+    let last_edit_id = id.with("number_input_last_edit");
+    let last_committed_id = id.with("number_input_committed_buf");
     let height = match style {
         NumberInputStyle::Inline => 28.0,
         NumberInputStyle::Field => 34.0,
@@ -4776,9 +4792,40 @@ pub fn number_input(
                 }
             }
         }
-        ui.data_mut(|d| d.remove::<String>(buf_id));
+        ui.data_mut(|d| {
+            d.remove::<String>(buf_id);
+            d.remove::<f64>(last_edit_id);
+            d.remove::<String>(last_committed_id);
+        });
     } else if response.has_focus() {
-        ui.data_mut(|d| d.insert_temp(buf_id, buf));
+        let now = ui.input(|i| i.time);
+        if response.changed() {
+            ui.data_mut(|d| d.insert_temp(last_edit_id, now));
+        }
+        ui.data_mut(|d| d.insert_temp(buf_id, buf.clone()));
+
+        let last_edit: f64 = ui.data(|d| d.get_temp(last_edit_id)).unwrap_or(now);
+        let already_committed: String = ui
+            .data(|d| d.get_temp::<String>(last_committed_id))
+            .unwrap_or_default();
+        let elapsed = (now - last_edit).max(0.0);
+        if elapsed >= NUMBER_INPUT_DEBOUNCE.as_secs_f64() && buf != already_committed {
+            if let Ok(parsed) = buf.parse::<u64>() {
+                let parsed = parsed.clamp(min, max);
+                if parsed != value {
+                    committed = Some(parsed);
+                }
+            }
+            ui.data_mut(|d| d.insert_temp(last_committed_id, buf));
+        } else {
+            // A focused `TextEdit` already repaints for cursor blink, but
+            // don't depend on that happening to land this check — ask
+            // explicitly for a repaint right when the debounce window ends.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(
+                    (NUMBER_INPUT_DEBOUNCE.as_secs_f64() - elapsed).max(0.0),
+                ));
+        }
     }
     NumberInputResponse {
         response,
