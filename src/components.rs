@@ -2638,6 +2638,19 @@ pub struct Toast {
     /// When this toast auto-expires. `None` means it sticks until the user
     /// dismisses it with the ✕ button (errors and warnings).
     until: Option<std::time::Instant>,
+    /// An optional one-click action: a button label plus an opaque tag the
+    /// caller chose. `toast_overlay` doesn't interpret the tag — it just
+    /// reports it back (see [`ToastActionClick`]) so the holder can carry
+    /// whatever it needs to undo/follow up (e.g. `"bom_undo_boards:<id>:4"`).
+    action: Option<(String, String)>,
+}
+
+/// Reported by [`toast_overlay`] when a toast's action button is clicked
+/// this frame — see [`ToastStack::push_with_action`].
+#[derive(Debug, Clone)]
+pub struct ToastActionClick {
+    pub toast_id: u64,
+    pub action_tag: String,
 }
 
 /// A queue of [`Toast`]s, drained by [`toast_overlay`].
@@ -2692,8 +2705,35 @@ impl ToastStack {
             message: message.into(),
             kind,
             until: Self::expiry(kind),
+            action: None,
         });
         self.enforce_capacity();
+    }
+
+    /// Push a toast with a one-click action button (e.g. "Undo"). The
+    /// `action_tag` is returned verbatim by `toast_overlay` through
+    /// [`ToastActionClick`] when the button is clicked, so the caller can
+    /// carry whatever state it needs to act on it — `toast_overlay` never
+    /// interprets it. The action button dismisses the toast when clicked.
+    /// Returns the new toast's id.
+    pub fn push_with_action(
+        &mut self,
+        message: impl Into<String>,
+        kind: ToastKind,
+        action_label: impl Into<String>,
+        action_tag: impl Into<String>,
+    ) -> u64 {
+        let id = self.alloc_id();
+        self.items.push(Toast {
+            id,
+            key: None,
+            message: message.into(),
+            kind,
+            until: Self::expiry(kind),
+            action: Some((action_label.into(), action_tag.into())),
+        });
+        self.enforce_capacity();
+        id
     }
 
     /// Upsert a **keyed** toast: if one with `key` already exists its message
@@ -2725,6 +2765,7 @@ impl ToastStack {
             message,
             kind,
             until: None,
+            action: None,
         });
         self.enforce_capacity();
     }
@@ -2803,10 +2844,14 @@ impl ToastStack {
 /// and egui is asked to repaint while a timed toast is still live so its
 /// auto-dismissal happens on time. Each toast shows a kind icon + title, the
 /// message, and a dismiss button.
-pub fn toast_overlay(ctx: &egui::Context, t: &Tokens, stack: &mut ToastStack) {
+pub fn toast_overlay(
+    ctx: &egui::Context,
+    t: &Tokens,
+    stack: &mut ToastStack,
+) -> Vec<ToastActionClick> {
     stack.prune();
     if stack.is_empty() {
-        return;
+        return Vec::new();
     }
 
     // Keep repainting only while a *timed* toast is live, so it vanishes on
@@ -2816,6 +2861,7 @@ pub fn toast_overlay(ctx: &egui::Context, t: &Tokens, stack: &mut ToastStack) {
     }
 
     let mut dismiss: Option<u64> = None;
+    let mut acted = Vec::new();
     egui::Area::new(egui::Id::new("tokito_ui_toasts"))
         .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
         .show(ctx, |ui| {
@@ -2849,6 +2895,20 @@ pub fn toast_overlay(ctx: &egui::Context, t: &Tokens, stack: &mut ToastStack) {
                                 egui::Label::new(RichText::new(&toast.message).color(t.text))
                                     .wrap(),
                             );
+                            if let Some((label, tag)) = &toast.action {
+                                ui.add_space(t.space_1);
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if text_button(ui, t, ButtonKind::Secondary, label, 26.0)
+                                        .clicked()
+                                    {
+                                        acted.push(ToastActionClick {
+                                            toast_id: toast.id,
+                                            action_tag: tag.clone(),
+                                        });
+                                        dismiss = Some(toast.id);
+                                    }
+                                });
+                            }
                         });
                     ui.add_space(t.space_2);
                 }
@@ -2858,6 +2918,7 @@ pub fn toast_overlay(ctx: &egui::Context, t: &Tokens, stack: &mut ToastStack) {
     if let Some(id) = dismiss {
         stack.items.retain(|toast| toast.id != id);
     }
+    acted
 }
 
 #[cfg(test)]
@@ -4633,14 +4694,29 @@ pub enum NumberInputStyle {
     Field,
 }
 
+/// How long a [`number_input`] waits after the last keystroke before
+/// auto-committing, even while still focused — see the debounce note on
+/// [`number_input`] itself.
+const NUMBER_INPUT_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(600);
+
 /// A compact, right-aligned integer field — inline table editing (a BOM
 /// quantity) or a small toolbar setting, per [`NumberInputStyle`].
 ///
 /// It edits a private text buffer while focused and only reports a value
-/// when the user **commits** — Enter or clicking away — so a caller can
-/// persist on commit without per-keystroke writes or a separate Save
-/// button. Escape reverts. Non-digits are ignored; the committed value is
-/// clamped to `min..=max`.
+/// when the user **commits** — Enter, clicking away, or (new) a short pause
+/// with no further keystrokes — so a caller can persist on commit without
+/// per-keystroke writes or a separate Save button. Escape reverts.
+/// Non-digits are ignored; the committed value is clamped to `min..=max`.
+///
+/// The debounced auto-commit exists because blur alone isn't a reliable
+/// signal: a host that stops rendering this widget (e.g. switching away
+/// from the tab/page it lives on) never produces a `lost_focus` event, so a
+/// typed-but-uncommitted value used to simply vanish. After a short pause
+/// (`NUMBER_INPUT_DEBOUNCE`, an internal constant) of no new keystrokes it
+/// commits anyway, while the widget is still being drawn — it cannot fire
+/// once the host stops calling this function, so a switch within the
+/// debounce window can still lose a very recent keystroke, but every other
+/// case now survives.
 ///
 /// `id_source` must be stable and unique per row (e.g. `("bom_qty",
 /// line_id)`) — the edit buffer is keyed off it.
@@ -4656,6 +4732,8 @@ pub fn number_input(
 ) -> NumberInputResponse {
     let id = egui::Id::new(id_source);
     let buf_id = id.with("number_input_buf");
+    let last_edit_id = id.with("number_input_last_edit");
+    let last_committed_id = id.with("number_input_committed_buf");
     let height = match style {
         NumberInputStyle::Inline => 28.0,
         NumberInputStyle::Field => 34.0,
@@ -4715,9 +4793,40 @@ pub fn number_input(
                 }
             }
         }
-        ui.data_mut(|d| d.remove::<String>(buf_id));
+        ui.data_mut(|d| {
+            d.remove::<String>(buf_id);
+            d.remove::<f64>(last_edit_id);
+            d.remove::<String>(last_committed_id);
+        });
     } else if response.has_focus() {
-        ui.data_mut(|d| d.insert_temp(buf_id, buf));
+        let now = ui.input(|i| i.time);
+        if response.changed() {
+            ui.data_mut(|d| d.insert_temp(last_edit_id, now));
+        }
+        ui.data_mut(|d| d.insert_temp(buf_id, buf.clone()));
+
+        let last_edit: f64 = ui.data(|d| d.get_temp(last_edit_id)).unwrap_or(now);
+        let already_committed: String = ui
+            .data(|d| d.get_temp::<String>(last_committed_id))
+            .unwrap_or_default();
+        let elapsed = (now - last_edit).max(0.0);
+        if elapsed >= NUMBER_INPUT_DEBOUNCE.as_secs_f64() && buf != already_committed {
+            if let Ok(parsed) = buf.parse::<u64>() {
+                let parsed = parsed.clamp(min, max);
+                if parsed != value {
+                    committed = Some(parsed);
+                }
+            }
+            ui.data_mut(|d| d.insert_temp(last_committed_id, buf));
+        } else {
+            // A focused `TextEdit` already repaints for cursor blink, but
+            // don't depend on that happening to land this check — ask
+            // explicitly for a repaint right when the debounce window ends.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(
+                    (NUMBER_INPUT_DEBOUNCE.as_secs_f64() - elapsed).max(0.0),
+                ));
+        }
     }
     NumberInputResponse {
         response,
