@@ -208,6 +208,8 @@ pub fn text_button(
     );
     let width = galley.size().x + t.space_4 * 2.0;
     let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    // Painted by hand, so name it for accessibility (and kittest queries).
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     let hv = hover_t(ui, response.id, response.hovered());
 
     let (fill, ink, border) = button_visuals(t, kind, hv);
@@ -2669,6 +2671,11 @@ impl ToastStack {
     /// Default visible time per non-sticky toast — currently 4 seconds.
     pub const DEFAULT_TTL: std::time::Duration = std::time::Duration::from_secs(4);
 
+    /// Visible time for a non-sticky toast carrying an action button
+    /// ([`Self::push_with_action`]) — long enough to read the message and
+    /// reach the button (an "Undo" gone in 4 s is barely an undo).
+    pub const ACTION_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
     /// Newest toasts rendered at once; older live ones queue behind them.
     pub const MAX_VISIBLE: usize = 5;
 
@@ -2715,6 +2722,7 @@ impl ToastStack {
     /// [`ToastActionClick`] when the button is clicked, so the caller can
     /// carry whatever state it needs to act on it — `toast_overlay` never
     /// interprets it. The action button dismisses the toast when clicked.
+    /// A non-sticky action toast lives [`Self::ACTION_TTL`].
     /// Returns the new toast's id.
     pub fn push_with_action(
         &mut self,
@@ -2729,7 +2737,7 @@ impl ToastStack {
             key: None,
             message: message.into(),
             kind,
-            until: Self::expiry(kind),
+            until: (!kind.sticky()).then(|| std::time::Instant::now() + Self::ACTION_TTL),
             action: Some((action_label.into(), action_tag.into())),
         });
         self.enforce_capacity();
@@ -2862,6 +2870,7 @@ pub fn toast_overlay(
 
     let mut dismiss: Option<u64> = None;
     let mut acted = Vec::new();
+    const ACTION_BUTTON_H: f32 = 26.0;
     egui::Area::new(egui::Id::new("tokito_ui_toasts"))
         .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
         .show(ctx, |ui| {
@@ -2897,17 +2906,33 @@ pub fn toast_overlay(
                             );
                             if let Some((label, tag)) = &toast.action {
                                 ui.add_space(t.space_1);
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    if text_button(ui, t, ButtonKind::Secondary, label, 26.0)
+                                // A row of exactly the button's height. A bare
+                                // `with_layout` here claimed the Area's whole
+                                // available height and centred the button in
+                                // it, and since the Area is anchored
+                                // bottom-right its size fed back into its own
+                                // position — the toast grew every frame.
+                                ui.allocate_ui_with_layout(
+                                    vec2(ui.available_width(), ACTION_BUTTON_H),
+                                    Layout::right_to_left(Align::Center),
+                                    |ui| {
+                                        if text_button(
+                                            ui,
+                                            t,
+                                            ButtonKind::Secondary,
+                                            label,
+                                            ACTION_BUTTON_H,
+                                        )
                                         .clicked()
-                                    {
-                                        acted.push(ToastActionClick {
-                                            toast_id: toast.id,
-                                            action_tag: tag.clone(),
-                                        });
-                                        dismiss = Some(toast.id);
-                                    }
-                                });
+                                        {
+                                            acted.push(ToastActionClick {
+                                                toast_id: toast.id,
+                                                action_tag: tag.clone(),
+                                            });
+                                            dismiss = Some(toast.id);
+                                        }
+                                    },
+                                );
                             }
                         });
                     ui.add_space(t.space_2);
@@ -3027,6 +3052,107 @@ mod toast_stack_tests {
             stack.set_keyed(format!("key-{i}"), format!("status {i}"), ToastKind::Error);
         }
         assert!(stack.items.len() <= ToastStack::MAX_RETAINED);
+    }
+}
+
+#[cfg(test)]
+mod toast_overlay_tests {
+    use super::*;
+    use egui_kittest::{kittest::Queryable, Harness};
+
+    struct ToastApp {
+        stack: ToastStack,
+        clicks: Vec<ToastActionClick>,
+        rects: Vec<egui::Rect>,
+    }
+
+    impl eframe::App for ToastApp {
+        fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+            let ctx = ui.ctx().clone();
+            let tokens = Tokens::dark();
+            crate::theme::apply(&ctx, &tokens);
+            self.clicks
+                .extend(toast_overlay(&ctx, &tokens, &mut self.stack));
+            if let Some(r) = ctx.memory(|m| m.area_rect(egui::Id::new("tokito_ui_toasts"))) {
+                self.rects.push(r);
+            }
+        }
+    }
+
+    fn harness_with_action_toast() -> Harness<'static, ToastApp> {
+        let mut stack = ToastStack::default();
+        stack.push_with_action(
+            "Boards set to 25 to reach this price break — every line was re-priced for \
+             the whole design.",
+            ToastKind::Info,
+            "Undo · back to 10",
+            "undo:10",
+        );
+        Harness::builder()
+            .with_size(vec2(1400.0, 900.0))
+            .build_eframe(move |cc| {
+                let mut fonts = egui::FontDefinitions::default();
+                crate::theme::add_phosphor(&mut fonts);
+                cc.egui_ctx.set_fonts(fonts);
+                ToastApp {
+                    stack,
+                    clicks: Vec::new(),
+                    rects: Vec::new(),
+                }
+            })
+    }
+
+    /// TokitoAI/tokito BOM check: the action row used a bare
+    /// `right_to_left(Align::Center)` layout in the toast's vertical body,
+    /// which claimed the whole available height and centred the button in
+    /// it — a window-tall panel, its message clipped off the top, and an
+    /// anchored Area whose size fed back into its own position each frame.
+    /// An action toast must stay a compact card, fully on screen, and hold
+    /// still.
+    #[test]
+    fn action_toast_is_compact_on_screen_and_stable() {
+        let mut harness = harness_with_action_toast();
+        for _ in 0..6 {
+            harness.step();
+        }
+        let rects = harness.state().rects.clone();
+        let last = *rects.last().expect("toast area painted");
+        assert!(
+            last.height() < 200.0,
+            "action toast is {} px tall — should be a compact card ({rects:?})",
+            last.height()
+        );
+        assert!(
+            last.width() < 400.0,
+            "action toast is {} px wide",
+            last.width()
+        );
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1400.0, 900.0));
+        assert!(
+            screen.contains_rect(last),
+            "toast {last:?} leaves the screen"
+        );
+        for pair in rects[rects.len() - 3..].windows(2) {
+            assert_eq!(pair[0], pair[1], "toast area moves between frames");
+        }
+    }
+
+    /// Clicking the action button reports its tag exactly once and
+    /// dismisses the toast.
+    #[test]
+    fn action_button_click_reports_its_tag_and_dismisses() {
+        let mut harness = harness_with_action_toast();
+        for _ in 0..4 {
+            harness.step();
+        }
+        harness.get_by_label("Undo · back to 10").click();
+        for _ in 0..3 {
+            harness.step();
+        }
+        let clicks = &harness.state().clicks;
+        assert_eq!(clicks.len(), 1, "expected one action click, got {clicks:?}");
+        assert_eq!(clicks[0].action_tag, "undo:10");
+        assert!(harness.state().stack.is_empty(), "toast not dismissed");
     }
 }
 
