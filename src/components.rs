@@ -4960,6 +4960,474 @@ pub fn number_input(
     }
 }
 
+// ---------------------------------------------------------------------------
+// tier_slider
+// ---------------------------------------------------------------------------
+
+/// One stop on a [`tier_slider`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TierStop {
+    /// The value this stop sets (a board count, a quantity). A slider's stops
+    /// are ascending and distinct, and every value is at least 1 (the track
+    /// is log-scaled).
+    pub value: u64,
+    /// Short tick label under the stop — compact digits ("10", "1k"). Labels
+    /// that would overlap a neighbour are skipped at narrow widths; the stop
+    /// keeps its tick and still previews on hover.
+    pub label: String,
+    /// The one line shown under the track while this stop is under a drag
+    /// or a hovering pointer ("₹15.10 / unit · ₹377.42 line").
+    pub detail: String,
+}
+
+/// Result of a [`tier_slider`] frame.
+pub struct TierSliderResponse {
+    /// The track's response: focusable and named `caption` for
+    /// accessibility (and kittest queries). Attach tooltips here.
+    pub response: Response,
+    /// `Some(i)` on the frame the user commits stop `i` — pointer release
+    /// after a drag, a click on the track, or an arrow / Home / End key
+    /// while focused. Never on an intermediate drag frame, never after
+    /// Escape cancelled the drag, and never for a stop whose value equals
+    /// `current` (nothing would change).
+    pub committed: Option<usize>,
+    /// The stop whose numbers are on show instead of `current`'s: the one
+    /// under a press or drag, else the one nearest a hovering pointer.
+    /// `None` at rest.
+    pub preview: Option<usize>,
+}
+
+/// Radius of a [`tier_slider`]'s thumb.
+const TIER_THUMB_RADIUS: f32 = 8.0;
+
+/// Where `value` sits on a log-scaled track spanning `lo..=hi`, as a
+/// `0.0..=1.0` fraction. Values outside the span clamp to its ends; a
+/// single-value span (one stop) puts everything mid-track.
+fn tier_fraction(lo: u64, hi: u64, value: u64) -> f32 {
+    let (lo, hi) = (lo.max(1) as f64, hi.max(1) as f64);
+    if hi <= lo {
+        return 0.5;
+    }
+    let v = (value.max(1) as f64).clamp(lo, hi);
+    ((v.ln() - lo.ln()) / (hi.ln() - lo.ln())) as f32
+}
+
+/// The stop whose x is nearest `x` (the lower one on an exact tie).
+fn nearest_tier(xs: &[f32], x: f32) -> Option<usize> {
+    xs.iter()
+        .enumerate()
+        .min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs()))
+        .map(|(i, _)| i)
+}
+
+/// The stop `steps` stops away from `current` (positive = up). From a
+/// value between two stops, one step up lands on the stop above it and one
+/// step down on the stop below. `None` when the first step already runs
+/// off an end.
+fn tier_step(values: &[u64], current: u64, steps: i32) -> Option<usize> {
+    let mut at = current;
+    let mut landed = None;
+    for _ in 0..steps.unsigned_abs() {
+        let next = if steps > 0 {
+            values.iter().position(|&v| v > at)
+        } else {
+            values.iter().rposition(|&v| v < at)
+        };
+        match next {
+            Some(i) => {
+                at = values[i];
+                landed = Some(i);
+            }
+            None => break,
+        }
+    }
+    landed
+}
+
+/// Centre x for each tick label, or `None` where it would collide. Labels
+/// are placed in `priority` order first, then left to right; each is
+/// clamped inside `left..=right` and kept `gap` clear of every label
+/// already placed. A zero width means "no label".
+fn place_tier_labels(
+    xs: &[f32],
+    widths: &[f32],
+    priority: &[usize],
+    left: f32,
+    right: f32,
+    gap: f32,
+) -> Vec<Option<f32>> {
+    let mut out = vec![None; xs.len()];
+    let mut placed: Vec<(f32, f32)> = Vec::new();
+    for i in priority.iter().copied().chain(0..xs.len()) {
+        if i >= xs.len() || out[i].is_some() || widths[i] <= 0.0 {
+            continue;
+        }
+        let half = widths[i] / 2.0;
+        let cx = xs[i].clamp(left + half, (right - half).max(left + half));
+        let (a, b) = (cx - half, cx + half);
+        if placed
+            .iter()
+            .all(|&(pa, pb)| b + gap <= pa || a >= pb + gap)
+        {
+            placed.push((a, b));
+            out[i] = Some(cx);
+        }
+    }
+    out
+}
+
+/// A horizontal, log-scaled slider whose only stops are `stops` — pick a
+/// tier, not an arbitrary value (a BOM's price breaks over its board
+/// count).
+///
+/// ```text
+/// Boards  25
+/// ●━━━━●━━━━◉─────────●─────●────●
+/// 1    10   25        100   250  500
+/// ₹15.10 / unit · ₹377.42 line
+/// ```
+///
+/// A caption with the value on show, the full-width track with a tick and
+/// compact label under each stop, then one detail line. At rest the thumb
+/// sits at `current`'s log position — between two stops when `current` is
+/// not a stop value — and the line reads `current_detail`. Dragging snaps
+/// the thumb to the nearest stop and previews that stop's value and
+/// [`TierStop::detail`]; hovering previews the nearest stop without moving
+/// the thumb. `marked` rings one stop (the tier in use).
+///
+/// It commits only on release — never per drag frame — or on a click, or
+/// on ←/→ (also ↓/↑, Home, End, and accessibility increment / decrement)
+/// while focused, which step to the neighbouring stop and commit at once.
+/// Escape during a drag cancels it. See [`TierSliderResponse`].
+///
+/// `stops` must be ascending and distinct; with none, only the caption and
+/// `current_detail` are drawn and nothing can be committed. `id_source`
+/// must be stable and unique — drag state is keyed off it. The widget is
+/// named `caption` with a slider role and its value, so kittest can find it
+/// by label.
+pub fn tier_slider(
+    ui: &mut Ui,
+    t: &Tokens,
+    id_source: impl Hash + std::fmt::Debug,
+    caption: &str,
+    stops: &[TierStop],
+    current: u64,
+    current_detail: &str,
+    marked: Option<usize>,
+) -> TierSliderResponse {
+    let id = egui::Id::new(id_source);
+    let drag_id = id.with("tier_slider_drag");
+    let cancel_id = id.with("tier_slider_cancelled");
+    let cap_font = egui::FontId::proportional(11.5);
+    let value_font = egui::FontId::proportional(13.0);
+    let tick_font = egui::FontId::proportional(11.0);
+    let detail_font = egui::FontId::proportional(12.0);
+    let (tick_row, detail_row) =
+        ui.fonts_mut(|f| (f.row_height(&tick_font), f.row_height(&detail_font)));
+
+    let header_h = 18.0;
+    let band_h = TIER_THUMB_RADIUS * 2.0 + 4.0;
+    let tick_len = 4.0;
+    let has_track = !stops.is_empty();
+    let (track_h, label_h) = if has_track {
+        (band_h, 1.0 + tick_len + 2.0 + tick_row)
+    } else {
+        (0.0, 0.0)
+    };
+    let total_h = header_h + t.space_1 + track_h + label_h + t.space_2 + detail_row;
+    let width = ui.available_width().max(4.0 * TIER_THUMB_RADIUS);
+    let (rect, _) = ui.allocate_exact_size(vec2(width, total_h), Sense::hover());
+
+    let band_top = rect.top() + header_h + t.space_1;
+    let band = Rect::from_min_max(
+        pos2(rect.left(), band_top),
+        pos2(rect.right(), band_top + track_h + label_h),
+    );
+    let track_y = band_top + band_h / 2.0;
+    let track_l = rect.left() + TIER_THUMB_RADIUS + 2.0;
+    let track_r = rect.right() - TIER_THUMB_RADIUS - 2.0;
+    let (lo, hi) = (
+        stops.first().map_or(1, |s| s.value),
+        stops.last().map_or(1, |s| s.value),
+    );
+    let x_of = |v: u64| egui::lerp(track_l..=track_r, tier_fraction(lo, hi, v));
+    let xs: Vec<f32> = stops.iter().map(|s| x_of(s.value)).collect();
+    let values: Vec<u64> = stops.iter().map(|s| s.value).collect();
+
+    let sense = if has_track {
+        Sense::click_and_drag()
+    } else {
+        Sense::hover()
+    };
+    let mut response = ui.interact(band, id, sense);
+    let mut committed = None;
+    let mut preview = None;
+    let mut dragging = false;
+
+    if has_track {
+        // Pointer: preview while pressed / dragged, commit on release.
+        let pointer_x = response.interact_pointer_pos().map(|p| p.x);
+        let was_cancelled = ui.data(|d| d.get_temp::<bool>(cancel_id)).unwrap_or(false);
+        let held = response.is_pointer_button_down_on() || response.dragged();
+        let released = response.clicked() || response.drag_stopped();
+        // Escape aborts the drag (egui itself ends it this frame, reporting
+        // `drag_stopped`), and the cancel holds until the button comes up.
+        let escape = (held || released) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if escape {
+            ui.data_mut(|d| {
+                d.insert_temp(cancel_id, true);
+                d.remove::<usize>(drag_id);
+            });
+        }
+        let cancelled = was_cancelled || escape;
+        if held && !cancelled {
+            if let Some(i) = pointer_x.and_then(|x| nearest_tier(&xs, x)) {
+                ui.data_mut(|d| d.insert_temp(drag_id, i));
+                preview = Some(i);
+                dragging = true;
+            }
+        }
+        if released {
+            // A fake click (Space / Enter / accesskit) carries no pointer
+            // position and commits nothing — keys step instead.
+            let real_pointer = pointer_x.is_some() || response.drag_stopped();
+            if real_pointer {
+                let at = pointer_x
+                    .and_then(|x| nearest_tier(&xs, x))
+                    .or_else(|| ui.data(|d| d.get_temp::<usize>(drag_id)));
+                if !cancelled {
+                    committed = at.filter(|&i| values[i] != current);
+                }
+                response.request_focus();
+            }
+            ui.data_mut(|d| d.remove::<usize>(drag_id));
+            if !escape {
+                ui.data_mut(|d| d.remove::<bool>(cancel_id));
+            }
+            preview = None;
+            dragging = false;
+        } else if !held && was_cancelled {
+            ui.data_mut(|d| d.remove::<bool>(cancel_id));
+        }
+
+        // Focus from the press on, so a host that hands Escape / arrows to
+        // whatever is focused (a side sheet that closes on Escape) leaves
+        // them to the slider mid-drag. While held, Escape keeps focus here —
+        // it cancels the drag instead of blurring.
+        if held && !response.has_focus() {
+            response.request_focus();
+        }
+        let focused = response.has_focus();
+        if focused {
+            ui.memory_mut(|m| {
+                m.set_focus_lock_filter(
+                    id,
+                    egui::EventFilter {
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        escape: held,
+                        ..Default::default()
+                    },
+                );
+            });
+        }
+
+        // Keyboard / accessibility stepping: commit at once.
+        let (steps, home, end) = ui.input(|i| {
+            use egui::accesskit::Action;
+            let mut steps = i.num_accesskit_action_requests(id, Action::Increment) as i32
+                - i.num_accesskit_action_requests(id, Action::Decrement) as i32;
+            let (mut home, mut end) = (false, false);
+            if focused {
+                steps += (i.num_presses(egui::Key::ArrowRight) + i.num_presses(egui::Key::ArrowUp))
+                    as i32;
+                steps -= (i.num_presses(egui::Key::ArrowLeft) + i.num_presses(egui::Key::ArrowDown))
+                    as i32;
+                home = i.key_pressed(egui::Key::Home);
+                end = i.key_pressed(egui::Key::End);
+            }
+            (steps, home, end)
+        });
+        if committed.is_none() && !dragging {
+            let target = if home {
+                Some(0)
+            } else if end {
+                Some(stops.len() - 1)
+            } else if steps != 0 {
+                tier_step(&values, current, steps)
+            } else {
+                None
+            };
+            committed = target.filter(|&i| values[i] != current);
+        }
+
+        // Hover preview — no button held on this or any other widget.
+        if !dragging && committed.is_none() && response.hovered() {
+            if let Some(p) = ui.input(|i| i.pointer.hover_pos()) {
+                preview = nearest_tier(&xs, p.x);
+            }
+        }
+        if dragging {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+    }
+    if committed.is_some() {
+        response.mark_changed();
+    }
+
+    // The value on show: a previewed stop, else what was just committed,
+    // else `current`.
+    let shown = preview.or(committed);
+    let shown_value = shown.map_or(current, |i| values[i]);
+    response.widget_info(|| egui::WidgetInfo::slider(true, shown_value as f64, caption));
+    if has_track {
+        ui.ctx().accesskit_node_builder(id, |b| {
+            use egui::accesskit::Action;
+            b.set_min_numeric_value(lo as f64);
+            b.set_max_numeric_value(hi as f64);
+            if values.iter().any(|&v| v > current) {
+                b.add_action(Action::Increment);
+            }
+            if values.iter().any(|&v| v < current) {
+                b.add_action(Action::Decrement);
+            }
+        });
+    }
+
+    // ---- paint ----------------------------------------------------------
+    let painter = ui.painter_at(rect.expand(2.0));
+    let previewing = shown.is_some_and(|i| values[i] != current);
+    let header_mid = rect.top() + header_h / 2.0;
+    let cap = painter.layout_no_wrap(caption.to_owned(), cap_font, t.text_2);
+    let cap_w = cap.size().x;
+    painter.galley(
+        pos2(rect.left(), header_mid - cap.size().y / 2.0),
+        cap,
+        t.text_2,
+    );
+    let value_ink = if previewing { t.accent } else { t.text };
+    let val = painter.layout_no_wrap(shown_value.to_string(), value_font, value_ink);
+    painter.galley(
+        pos2(
+            rect.left() + cap_w + t.space_2,
+            header_mid - val.size().y / 2.0,
+        ),
+        val,
+        value_ink,
+    );
+
+    if has_track {
+        let hv = hover_t(ui, id, response.hovered() || dragging);
+        let thumb_target = match (dragging, preview) {
+            (true, Some(i)) => xs[i],
+            _ => x_of(current),
+        };
+        let thumb_x =
+            ui.ctx()
+                .animate_value_with_time(id.with("tier_slider_thumb"), thumb_target, 0.08);
+
+        // Track, filled up to the thumb.
+        let rail = Rect::from_min_max(pos2(track_l, track_y - 2.0), pos2(track_r, track_y + 2.0));
+        painter.rect_filled(rail, egui::CornerRadius::same(2), t.border);
+        let filled = Rect::from_min_max(rail.min, pos2(thumb_x.max(track_l), rail.max.y));
+        painter.rect_filled(filled, egui::CornerRadius::same(2), t.accent);
+
+        // Stops: a dot on the track and a tick under it; the marked one
+        // gets a ring and an accent tick.
+        let tick_top = band_top + band_h + 1.0;
+        for (i, &x) in xs.iter().enumerate() {
+            let is_marked = Some(i) == marked;
+            let dot = if x <= thumb_x + 0.5 {
+                lerp_color(t.accent, t.accent_ink, 0.35)
+            } else {
+                t.border_strong
+            };
+            painter.circle_filled(pos2(x, track_y), 3.0, dot);
+            let tick_ink = if is_marked { t.accent } else { t.border_strong };
+            painter.line_segment(
+                [pos2(x, tick_top), pos2(x, tick_top + tick_len)],
+                Stroke::new(1.0, tick_ink),
+            );
+            if is_marked {
+                painter.circle_stroke(pos2(x, track_y), 5.5, Stroke::new(1.5, t.accent));
+            }
+        }
+        // Hover preview: a soft ghost thumb on the stop.
+        if let (false, Some(i)) = (dragging, preview) {
+            painter.circle_filled(pos2(xs[i], track_y), TIER_THUMB_RADIUS, t.accent_soft);
+        }
+
+        // Thumb, with a focus ring.
+        let thumb = pos2(thumb_x, track_y);
+        if response.has_focus() {
+            painter.circle_stroke(
+                thumb,
+                TIER_THUMB_RADIUS + 3.5,
+                Stroke::new(2.0, t.accent.gamma_multiply(0.45)),
+            );
+        }
+        let r = TIER_THUMB_RADIUS + hv;
+        painter.circle_filled(thumb, r, Color32::from_rgb(0xfa, 0xfb, 0xfc));
+        painter.circle_stroke(thumb, r, Stroke::new(2.0, t.accent));
+
+        // Tick labels: the marked stop, the stop on show and both ends win
+        // a collision; the rest fill in wherever they fit.
+        let on_stop = values.iter().position(|&v| v == current);
+        let emphasised = shown.or(on_stop);
+        let galleys: Vec<_> = stops
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let ink = if Some(i) == marked {
+                    t.accent
+                } else if Some(i) == emphasised {
+                    t.text
+                } else {
+                    t.text_3
+                };
+                let g = painter.layout_no_wrap(s.label.clone(), tick_font.clone(), ink);
+                (g, ink)
+            })
+            .collect();
+        let widths: Vec<f32> = galleys
+            .iter()
+            .zip(stops)
+            .map(|((g, _), s)| if s.label.is_empty() { 0.0 } else { g.size().x })
+            .collect();
+        let mut priority: Vec<usize> = Vec::new();
+        priority.extend(marked);
+        priority.extend(emphasised);
+        priority.extend([0, stops.len() - 1]);
+        let centres = place_tier_labels(&xs, &widths, &priority, rect.left(), rect.right(), 6.0);
+        let label_top = tick_top + tick_len + 2.0;
+        for ((galley, ink), cx) in galleys.into_iter().zip(centres) {
+            if let Some(cx) = cx {
+                let w = galley.size().x;
+                painter.galley(pos2(cx - w / 2.0, label_top), galley, ink);
+            }
+        }
+    }
+
+    // Detail line: the stop on show, else the current value's own numbers.
+    let detail = match shown {
+        Some(i) if previewing => stops[i].detail.as_str(),
+        _ => current_detail,
+    };
+    if !detail.is_empty() {
+        let ink = if previewing { t.text } else { t.text_2 };
+        let line = elided(ui, detail, detail_font, ink, rect.width());
+        painter.galley(pos2(rect.left(), rect.bottom() - detail_row), line, ink);
+    }
+
+    TierSliderResponse {
+        response,
+        committed,
+        preview,
+    }
+}
+
 /// Lay `text` out on one line, eliding with `…` past `max_width`.
 fn elided(
     ui: &Ui,
@@ -5574,5 +6042,351 @@ mod data_table_tests {
             ];
         });
         assert_eq!(heights, vec![RESULT_ROW_HEIGHT; 3]);
+    }
+}
+
+#[cfg(test)]
+mod tier_slider_tests {
+    use super::*;
+    use egui_kittest::{
+        kittest::{NodeT, Queryable},
+        Harness,
+    };
+
+    fn stops(values: &[u64]) -> Vec<TierStop> {
+        values
+            .iter()
+            .map(|&v| TierStop {
+                value: v,
+                label: v.to_string(),
+                detail: format!("at {v}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn log_position_maps_stops_to_the_ends_and_spaces_decades_evenly() {
+        assert_eq!(tier_fraction(1, 1000, 1), 0.0);
+        assert_eq!(tier_fraction(1, 1000, 1000), 1.0);
+        assert!((tier_fraction(1, 1000, 10) - 1.0 / 3.0).abs() < 1e-6);
+        assert!((tier_fraction(1, 1000, 100) - 2.0 / 3.0).abs() < 1e-6);
+        // A value between two stops sits strictly between them.
+        let (a, b, c) = (
+            tier_fraction(1, 1000, 25),
+            tier_fraction(1, 1000, 37),
+            tier_fraction(1, 1000, 100),
+        );
+        assert!(a < b && b < c, "{a} {b} {c}");
+        // Outside the span clamps; one stop sits mid-track; 0 reads as 1.
+        assert_eq!(tier_fraction(10, 1000, 2), 0.0);
+        assert_eq!(tier_fraction(10, 1000, 5000), 1.0);
+        assert_eq!(tier_fraction(25, 25, 400), 0.5);
+        assert_eq!(tier_fraction(0, 100, 0), 0.0);
+    }
+
+    #[test]
+    fn a_position_snaps_to_the_nearest_stop() {
+        let xs = [0.0, 100.0, 140.0, 300.0];
+        assert_eq!(nearest_tier(&xs, -20.0), Some(0));
+        assert_eq!(nearest_tier(&xs, 49.0), Some(0));
+        assert_eq!(nearest_tier(&xs, 51.0), Some(1));
+        assert_eq!(nearest_tier(&xs, 121.0), Some(2));
+        assert_eq!(nearest_tier(&xs, 1000.0), Some(3));
+        // Exact tie: the lower stop.
+        assert_eq!(nearest_tier(&xs, 50.0), Some(0));
+        assert_eq!(nearest_tier(&[], 50.0), None);
+    }
+
+    #[test]
+    fn keyboard_steps_move_between_stops_from_on_and_off_stop_values() {
+        let v = [1, 10, 25, 100, 1000];
+        assert_eq!(tier_step(&v, 25, 1), Some(3));
+        assert_eq!(tier_step(&v, 25, -1), Some(1));
+        assert_eq!(tier_step(&v, 25, 2), Some(4));
+        // Off a stop (Boards typed as 37): up is 100, down is 25.
+        assert_eq!(tier_step(&v, 37, 1), Some(3));
+        assert_eq!(tier_step(&v, 37, -1), Some(2));
+        // Past the ends: stays put, or stops at the end.
+        assert_eq!(tier_step(&v, 1000, 1), None);
+        assert_eq!(tier_step(&v, 1, -1), None);
+        assert_eq!(tier_step(&v, 100, 5), Some(4));
+        // Below / above every stop.
+        assert_eq!(tier_step(&[10, 100], 3, 1), Some(0));
+        assert_eq!(tier_step(&[10, 100], 3000, -1), Some(1));
+    }
+
+    #[test]
+    fn tick_labels_never_overlap_and_priority_labels_always_show() {
+        // Seven stops crammed into 120 px: 1, 10, 25, 100, 250, 500, 1k.
+        let xs = [0.0, 40.0, 56.0, 80.0, 96.0, 108.0, 120.0];
+        let widths = [6.0, 12.0, 12.0, 18.0, 18.0, 18.0, 14.0];
+        let marked = 2;
+        let out = place_tier_labels(&xs, &widths, &[marked, 0, 6], 0.0, 120.0, 6.0);
+        assert!(out[marked].is_some() && out[0].is_some() && out[6].is_some());
+        assert!(
+            out.iter().any(Option::is_none),
+            "nothing was skipped: {out:?}"
+        );
+        let spans: Vec<(f32, f32)> = out
+            .iter()
+            .zip(widths)
+            .filter_map(|(c, w)| c.map(|c| (c - w / 2.0, c + w / 2.0)))
+            .collect();
+        for (i, a) in spans.iter().enumerate() {
+            assert!(a.0 >= 0.0 && a.1 <= 120.0, "{a:?} leaves the track");
+            for b in &spans[i + 1..] {
+                assert!(a.1 + 6.0 <= b.0 || b.1 + 6.0 <= a.0, "{a:?} overlaps {b:?}");
+            }
+        }
+        // Wide enough: every label shows, centred on its stop.
+        let xs = [0.0, 100.0, 200.0];
+        let out = place_tier_labels(&xs, &[10.0; 3], &[], 0.0, 200.0, 6.0);
+        assert_eq!(out, vec![Some(5.0), Some(100.0), Some(195.0)]);
+    }
+
+    struct St {
+        stops: Vec<TierStop>,
+        current: u64,
+        commits: Vec<usize>,
+        previews: Vec<Option<usize>>,
+        /// Escapes the host took — it closes on an unmodified Escape when
+        /// nothing is focused, as the BOM's side sheet does.
+        host_escapes: usize,
+    }
+
+    fn harness(values: &[u64], current: u64) -> Harness<'static, St> {
+        let mut first = true;
+        Harness::builder()
+            .with_size(vec2(520.0, 160.0))
+            .build_ui_state(
+                move |ui: &mut Ui, st: &mut St| {
+                    let t = Tokens::dark();
+                    if first {
+                        crate::theme::apply(ui.ctx(), &t);
+                        first = false;
+                    }
+                    if ui.memory(|m| m.focused().is_none())
+                        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                    {
+                        st.host_escapes += 1;
+                    }
+                    let detail = format!("now {}", st.current);
+                    let r = tier_slider(
+                        ui,
+                        &t,
+                        "test_tiers",
+                        "Boards",
+                        &st.stops,
+                        st.current,
+                        &detail,
+                        st.stops.iter().rposition(|s| s.value <= st.current),
+                    );
+                    st.previews.push(r.preview);
+                    if let Some(i) = r.committed {
+                        st.commits.push(i);
+                        // As a caller would: the commit becomes `current`.
+                        st.current = st.stops[i].value;
+                    }
+                },
+                St {
+                    stops: stops(values),
+                    current,
+                    commits: Vec::new(),
+                    previews: Vec::new(),
+                    host_escapes: 0,
+                },
+            )
+    }
+
+    /// Screen x of stop `i`, mirroring the slider's own layout: the track
+    /// is the widget's width inset by the thumb radius + 2 px each side.
+    fn stop_x(h: &Harness<'_, St>, i: usize) -> f32 {
+        let rect = h.get_by_label("Boards").rect();
+        let st = h.state();
+        let (lo, hi) = (st.stops[0].value, st.stops.last().unwrap().value);
+        let inset = TIER_THUMB_RADIUS + 2.0;
+        egui::lerp(
+            (rect.left() + inset)..=(rect.right() - inset),
+            tier_fraction(lo, hi, st.stops[i].value),
+        )
+    }
+
+    /// The slider's accessible numeric value — the value on show.
+    fn slider_value(h: &Harness<'_, St>) -> Option<f64> {
+        h.get_by_label("Boards").accesskit_node().numeric_value()
+    }
+
+    fn track_y(h: &Harness<'_, St>) -> f32 {
+        let rect = h.get_by_label("Boards").rect();
+        rect.top() + TIER_THUMB_RADIUS + 2.0
+    }
+
+    #[test]
+    fn a_drag_previews_each_stop_but_commits_once_on_release() {
+        let mut h = harness(&[1, 10, 25, 100, 250, 500, 1000], 10);
+        h.run_steps(2);
+        let y = track_y(&h);
+        let start = pos2(stop_x(&h, 1), y);
+        h.hover_at(start);
+        h.run_steps(1);
+        h.drag_at(start);
+        h.run_steps(2);
+        // Sweep right across several stops, a few frames each.
+        for i in 2..=5 {
+            let p = pos2(stop_x(&h, i) + 3.0, y);
+            h.hover_at(p);
+            h.run_steps(3);
+            assert_eq!(h.state().commits, Vec::<usize>::new(), "committed mid-drag");
+            assert_eq!(
+                *h.state().previews.last().unwrap(),
+                Some(i),
+                "preview at {i}"
+            );
+        }
+        h.drop_at(pos2(stop_x(&h, 5) + 3.0, y));
+        h.run_steps(3);
+        assert_eq!(h.state().commits, vec![5], "exactly one commit, on release");
+        assert_eq!(h.state().current, 500);
+        assert_eq!(*h.state().previews.last().unwrap(), None);
+    }
+
+    #[test]
+    fn a_click_on_a_stop_commits_it_and_the_current_stop_commits_nothing() {
+        let mut h = harness(&[1, 10, 25, 100], 10);
+        h.run_steps(2);
+        let y = track_y(&h);
+        let click = |h: &mut Harness<'_, St>, x: f32| {
+            h.hover_at(pos2(x, y));
+            h.event(egui::Event::PointerButton {
+                pos: pos2(x, y),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.event(egui::Event::PointerButton {
+                pos: pos2(x, y),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run_steps(3);
+        };
+        let x = stop_x(&h, 3) - 4.0;
+        click(&mut h, x);
+        assert_eq!(h.state().commits, vec![3]);
+        let x = stop_x(&h, 3);
+        click(&mut h, x);
+        assert_eq!(
+            h.state().commits,
+            vec![3],
+            "re-clicking the current stop committed"
+        );
+    }
+
+    /// Escape mid-drag cancels it: no commit on release. The slider holds
+    /// focus from the press, so a host that closes on Escape when nothing
+    /// is focused (the BOM inspector) leaves that Escape alone — egui ends
+    /// the drag itself on Escape, and a slider that never saw the key used
+    /// to commit on the resulting `drag_stopped`.
+    #[test]
+    fn escape_during_a_drag_cancels_it_and_stays_with_the_slider() {
+        let mut h = harness(&[1, 10, 25, 100], 1);
+        h.run_steps(2);
+        let y = track_y(&h);
+        let start = pos2(stop_x(&h, 0), y);
+        h.hover_at(start);
+        h.drag_at(start);
+        h.run_steps(2);
+        h.hover_at(pos2(stop_x(&h, 3), y));
+        h.run_steps(2);
+        assert_eq!(*h.state().previews.last().unwrap(), Some(3));
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert_eq!(h.state().host_escapes, 0, "the host took the drag's Escape");
+        h.drop_at(pos2(stop_x(&h, 3), y));
+        h.run_steps(2);
+        assert_eq!(h.state().commits, Vec::<usize>::new());
+        assert_eq!(h.state().current, 1);
+        // At rest, Escape is the host's again (one press blurs the slider
+        // and reaches the host).
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert_eq!(h.state().host_escapes, 1);
+    }
+
+    #[test]
+    fn arrow_keys_step_between_stops_and_commit_when_focused() {
+        // Boards typed as 37, between the 25 and 100 stops.
+        let mut h = harness(&[1, 10, 25, 100, 1000], 37);
+        h.run_steps(2);
+        // Not focused: arrows do nothing.
+        h.key_press(egui::Key::ArrowRight);
+        h.run_steps(2);
+        assert_eq!(h.state().commits, Vec::<usize>::new());
+
+        h.get_by_label("Boards").focus();
+        h.run_steps(2);
+        assert!(
+            h.get_by_label("Boards").is_focused(),
+            "slider isn't focusable"
+        );
+        h.key_press(egui::Key::ArrowRight);
+        h.run_steps(2);
+        assert_eq!(h.state().commits, vec![3], "37 → up lands on 100");
+        h.key_press(egui::Key::ArrowLeft);
+        h.run_steps(2);
+        h.key_press(egui::Key::ArrowLeft);
+        h.run_steps(2);
+        assert_eq!(h.state().commits, vec![3, 2, 1]);
+        h.key_press(egui::Key::End);
+        h.run_steps(2);
+        h.key_press(egui::Key::ArrowRight);
+        h.run_steps(2);
+        assert_eq!(
+            h.state().commits,
+            vec![3, 2, 1, 4],
+            "stepping past the end moved"
+        );
+        assert!(
+            h.get_by_label("Boards").is_focused(),
+            "arrows moved focus away"
+        );
+        // The accessible value tracks the committed stop.
+        assert_eq!(slider_value(&h), Some(1000.0));
+    }
+
+    #[test]
+    fn hovering_previews_the_nearest_stop_without_committing() {
+        let mut h = harness(&[1, 10, 100], 1);
+        h.run_steps(2);
+        let y = track_y(&h);
+        h.hover_at(pos2(stop_x(&h, 2) - 2.0, y));
+        h.run_steps(2);
+        assert_eq!(*h.state().previews.last().unwrap(), Some(2));
+        assert_eq!(h.state().commits, Vec::<usize>::new());
+        assert_eq!(slider_value(&h), Some(100.0));
+        h.remove_cursor();
+        h.run_steps(2);
+        assert_eq!(*h.state().previews.last().unwrap(), None);
+        assert_eq!(slider_value(&h), Some(1.0));
+    }
+
+    #[test]
+    fn a_single_stop_or_none_renders_without_panicking() {
+        let mut h = harness(&[25], 4);
+        h.run_steps(2);
+        let y = track_y(&h);
+        let x = stop_x(&h, 0);
+        h.hover_at(pos2(x, y));
+        h.drag_at(pos2(x, y));
+        h.drop_at(pos2(x, y));
+        h.run_steps(2);
+        assert_eq!(h.state().commits, vec![0]);
+
+        let mut h = harness(&[], 4);
+        h.run_steps(2);
+        h.key_press(egui::Key::ArrowRight);
+        h.run_steps(2);
+        assert_eq!(h.state().commits, Vec::<usize>::new());
     }
 }

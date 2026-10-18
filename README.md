@@ -124,6 +124,7 @@ All live in `tokito_ui::components` (aliased `c` above). Each takes
 | `nav_item` | `nav_item(ui, t, label, selected) -> Response` | A sidebar nav row — solid accent fill when selected. |
 | `checkbox` | `checkbox(ui, t, &mut bool, label, description) -> Response` | A square checkbox with a label and optional description line. |
 | `segmented` | `segmented(ui, t, options, &mut usize, width) -> Response` | A horizontal segmented control (mutually-exclusive options). |
+| `tier_slider` + `TierStop` | `tier_slider(ui, t, id_source, caption, &stops, current, current_detail, marked) -> TierSliderResponse` | A full-width log-scaled slider that snaps to fixed stops (price tiers): caption + value, ticks with compact labels (skipped when they'd collide), one detail line that previews the stop under a drag / hover. Commits only on release, click, or ←/→ / Home / End while focused; Escape cancels a drag. Named `caption` with a slider role for accessibility. |
 | `select` | `select(ui, t, id_source, current, width, \|ui\| …) -> Response` | A dropdown — trigger box + popup of `select_option`s. |
 | `select_option` | `select_option(ui, t, label, selected) -> bool` | One option row inside a `select` popup. |
 | `banner` | `banner(ui, t, kind, glyph, title, body) -> Response` | A status callout — `BannerKind::Success` / `Danger` / `Warning` / `Info`. |
