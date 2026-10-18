@@ -2645,7 +2645,25 @@ pub struct Toast {
     /// reports it back (see [`ToastActionClick`]) so the holder can carry
     /// whatever it needs to undo/follow up (e.g. `"bom_undo_boards:<id>:4"`).
     action: Option<(String, String)>,
+    /// How [`toast_overlay`] lays it out.
+    style: ToastStyle,
 }
+
+/// How [`toast_overlay`] lays a toast out.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ToastStyle {
+    /// A 300 px card: kind icon + title + ✕, the wrapped message, then the
+    /// action button (if any) on its own row.
+    #[default]
+    Card,
+    /// One compact row (~38 px): a small kind icon, the message on a single
+    /// line (ellipsised past a max width) and the action button inline on
+    /// the right — [`ToastStack::push_action_line`].
+    Line,
+}
+
+/// Widest a [`ToastStyle::Line`] toast's message gets before it ellipsises.
+const TOAST_LINE_MAX_TEXT: f32 = 320.0;
 
 /// Reported by [`toast_overlay`] when a toast's action button is clicked
 /// this frame — see [`ToastStack::push_with_action`].
@@ -2713,6 +2731,7 @@ impl ToastStack {
             kind,
             until: Self::expiry(kind),
             action: None,
+            style: ToastStyle::Card,
         });
         self.enforce_capacity();
     }
@@ -2739,9 +2758,76 @@ impl ToastStack {
             kind,
             until: (!kind.sticky()).then(|| std::time::Instant::now() + Self::ACTION_TTL),
             action: Some((action_label.into(), action_tag.into())),
+            style: ToastStyle::Card,
         });
         self.enforce_capacity();
         id
+    }
+
+    /// Push a **compact, keyed** action toast: one ~38 px row — a small
+    /// kind icon, `message` on a single line (ellipsised if long) and the
+    /// action button inline on the right; no title row, no ✕. For a quick
+    /// "did X · Undo" confirmation that shouldn't cover half the window.
+    ///
+    /// If a live toast with `key` is already showing, it is **replaced in
+    /// place** — new message, kind, label and tag, and its timer reset to
+    /// the full [`Self::ACTION_TTL`] — instead of stacking another. To carry
+    /// state across replacements (an undo that should restore the value
+    /// from before the *first* change), read the showing toast's tag with
+    /// [`Self::live_action_tag`] before pushing. The tag is reported back
+    /// through [`ToastActionClick`] exactly as for
+    /// [`Self::push_with_action`], and the button dismisses the toast.
+    /// Returns the toast's id (unchanged on a replace).
+    pub fn push_action_line(
+        &mut self,
+        key: impl Into<String>,
+        message: impl Into<String>,
+        kind: ToastKind,
+        action_label: impl Into<String>,
+        action_tag: impl Into<String>,
+    ) -> u64 {
+        let key = key.into();
+        let until = (!kind.sticky()).then(|| std::time::Instant::now() + Self::ACTION_TTL);
+        let action = Some((action_label.into(), action_tag.into()));
+        let message = message.into();
+        if let Some(existing) = self
+            .items
+            .iter_mut()
+            .find(|t| t.key.as_deref() == Some(key.as_str()))
+        {
+            existing.message = message;
+            existing.kind = kind;
+            existing.until = until;
+            existing.action = action;
+            existing.style = ToastStyle::Line;
+            return existing.id;
+        }
+        let id = self.alloc_id();
+        self.items.push(Toast {
+            id,
+            key: Some(key),
+            message,
+            kind,
+            until,
+            action,
+            style: ToastStyle::Line,
+        });
+        self.enforce_capacity();
+        id
+    }
+
+    /// The action tag of the toast with `key`, if one is still showing —
+    /// `None` once it expired, was dismissed, or its action was clicked.
+    /// Lets a caller of [`Self::push_action_line`] merge a new event into
+    /// the payload of the run already on screen.
+    pub fn live_action_tag(&self, key: &str) -> Option<&str> {
+        let now = std::time::Instant::now();
+        self.items
+            .iter()
+            .filter(|t| t.until.is_none_or(|u| u > now))
+            .find(|t| t.key.as_deref() == Some(key))
+            .and_then(|t| t.action.as_ref())
+            .map(|(_, tag)| tag.as_str())
     }
 
     /// Upsert a **keyed** toast: if one with `key` already exists its message
@@ -2764,6 +2850,8 @@ impl ToastStack {
             existing.message = message;
             existing.kind = kind;
             existing.until = None;
+            existing.action = None;
+            existing.style = ToastStyle::Card;
             return;
         }
         let id = self.alloc_id();
@@ -2774,6 +2862,7 @@ impl ToastStack {
             kind,
             until: None,
             action: None,
+            style: ToastStyle::Card,
         });
         self.enforce_capacity();
     }
@@ -2874,10 +2963,33 @@ pub fn toast_overlay(
     egui::Area::new(egui::Id::new("tokito_ui_toasts"))
         .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
         .show(ctx, |ui| {
+            // (A right-aligned layout here would claim the Area's whole
+            // max width; the Area sizes itself to the widest toast.)
             ui.vertical(|ui| {
                 // Newest-first: most-recent push appears on top.
-                for toast in stack.items.iter().rev().take(ToastStack::MAX_VISIBLE) {
+                for (i, toast) in stack
+                    .items
+                    .iter()
+                    .rev()
+                    .take(ToastStack::MAX_VISIBLE)
+                    .enumerate()
+                {
+                    // Gaps only *between* toasts, so the Area hugs the
+                    // bottom one.
+                    if i > 0 {
+                        ui.add_space(t.space_2);
+                    }
                     let accent = toast.kind.accent(t);
+                    if toast.style == ToastStyle::Line {
+                        if let Some(tag) = toast_line(ui, t, toast, accent, ACTION_BUTTON_H) {
+                            acted.push(ToastActionClick {
+                                toast_id: toast.id,
+                                action_tag: tag,
+                            });
+                            dismiss = Some(toast.id);
+                        }
+                        continue;
+                    }
                     egui::Frame::popup(ui.style())
                         .fill(t.card)
                         .stroke(Stroke::new(1.0, accent))
@@ -2935,7 +3047,6 @@ pub fn toast_overlay(
                                 );
                             }
                         });
-                    ui.add_space(t.space_2);
                 }
             });
         });
@@ -2946,9 +3057,112 @@ pub fn toast_overlay(
     acted
 }
 
+/// One [`ToastStyle::Line`] toast: icon · single-line message · action
+/// button, in a compact frame sized to its content. Returns the action tag
+/// when the button was clicked this frame.
+fn toast_line(
+    ui: &mut Ui,
+    t: &Tokens,
+    toast: &Toast,
+    accent: Color32,
+    button_h: f32,
+) -> Option<String> {
+    let mut clicked = None;
+    egui::Frame::popup(ui.style())
+        .fill(t.card)
+        .stroke(Stroke::new(1.0, accent.gamma_multiply(0.7)))
+        .corner_radius(t.rounding_md())
+        .inner_margin(egui::Margin::symmetric(10, 5))
+        .show(ui, |ui| {
+            // A row of exactly the button's height — see the card's action
+            // row in `toast_overlay` for why the height must be fixed.
+            let message = elided(
+                ui,
+                &toast.message,
+                egui::FontId::proportional(13.0),
+                t.text,
+                TOAST_LINE_MAX_TEXT,
+            );
+            let label = toast.action.as_ref().map(|(label, _)| label.as_str());
+            let icon_w = 14.0;
+            let button_w = label.map_or(0.0, |l| {
+                ui.painter()
+                    .layout_no_wrap(
+                        l.to_owned(),
+                        TextStyle::Button.resolve(ui.style()),
+                        Color32::PLACEHOLDER,
+                    )
+                    .size()
+                    .x
+                    + t.space_4 * 2.0
+                    + t.space_3
+            });
+            let w = icon_w + t.space_2 + message.size().x + button_w;
+            ui.allocate_ui_with_layout(
+                vec2(w, button_h),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.label(
+                        RichText::new(toast.kind.icon())
+                            .color(accent)
+                            .font(icons::font(icon_w)),
+                    );
+                    ui.add_space(t.space_2);
+                    ui.add(egui::Label::new(message).selectable(false));
+                    if let Some((label, tag)) = &toast.action {
+                        ui.add_space(t.space_3);
+                        if text_button(ui, t, ButtonKind::Secondary, label, button_h).clicked() {
+                            clicked = Some(tag.clone());
+                        }
+                    }
+                },
+            );
+        });
+    clicked
+}
+
 #[cfg(test)]
 mod toast_stack_tests {
     use super::*;
+
+    /// A keyed line toast pushed again while showing is replaced in place
+    /// — same id, new text and tag, timer back to the full action TTL —
+    /// rather than stacked; other keys still stack.
+    #[test]
+    fn a_keyed_action_line_replaces_in_place_and_resets_its_timer() {
+        let mut stack = ToastStack::default();
+        let id = stack.push_action_line("k", "first", ToastKind::Info, "Undo", "t1");
+        assert_eq!(stack.live_action_tag("k"), Some("t1"));
+        // Age it to a second before expiry.
+        let now = std::time::Instant::now();
+        stack.items[0].until = Some(now + std::time::Duration::from_secs(1));
+        let again = stack.push_action_line("k", "second", ToastKind::Info, "Undo", "t2");
+        assert_eq!(again, id, "a replace keeps the toast's identity");
+        assert_eq!(stack.items.len(), 1, "a keyed push stacked");
+        assert_eq!(stack.items[0].message, "second");
+        assert_eq!(stack.live_action_tag("k"), Some("t2"));
+        let until = stack.items[0].until.expect("an info line toast is timed");
+        assert!(
+            until >= now + ToastStack::ACTION_TTL - std::time::Duration::from_millis(500),
+            "the timer wasn't reset to the full TTL"
+        );
+        // A different key is a different toast.
+        stack.push_action_line("other", "x", ToastKind::Info, "Undo", "t3");
+        assert_eq!(stack.items.len(), 2);
+    }
+
+    /// An expired line toast's payload is gone even before the overlay
+    /// prunes it, so the next change starts a fresh run.
+    #[test]
+    fn an_expired_action_line_has_no_live_tag() {
+        let mut stack = ToastStack::default();
+        stack.push_action_line("k", "m", ToastKind::Info, "Undo", "t1");
+        stack.items[0].until =
+            Some(std::time::Instant::now() - std::time::Duration::from_millis(1));
+        assert_eq!(stack.live_action_tag("k"), None);
+        assert_eq!(stack.live_action_tag("missing"), None);
+    }
 
     /// A recurring failure condition (e.g. repeated catalog-transport
     /// errors) hammering `push_error` for a long-running session must not
@@ -3088,6 +3302,10 @@ mod toast_overlay_tests {
             "Undo · back to 10",
             "undo:10",
         );
+        harness_with_stack(stack)
+    }
+
+    fn harness_with_stack(stack: ToastStack) -> Harness<'static, ToastApp> {
         Harness::builder()
             .with_size(vec2(1400.0, 900.0))
             .build_eframe(move |cc| {
@@ -3153,6 +3371,71 @@ mod toast_overlay_tests {
         assert_eq!(clicks.len(), 1, "expected one action click, got {clicks:?}");
         assert_eq!(clicks[0].action_tag, "undo:10");
         assert!(harness.state().stack.is_empty(), "toast not dismissed");
+    }
+
+    /// Joel's live check: an "Undo" toast was a 120 px card (title row,
+    /// two-line message, its own button row) and a second change stacked
+    /// another. A line toast is one short row — message and button side by
+    /// side — that holds still, and replacing it keeps it one toast.
+    #[test]
+    fn a_line_toast_is_one_short_row_and_a_keyed_push_never_stacks() {
+        let mut stack = ToastStack::default();
+        stack.push_action_line(
+            "boards",
+            "Boards 10 → 25 · all lines repriced",
+            ToastKind::Info,
+            "Undo",
+            "undo:10",
+        );
+        let mut harness = harness_with_stack(stack);
+        harness.run_steps(6);
+        let rects = harness.state().rects.clone();
+        let last = *rects.last().expect("toast area painted");
+        assert!(
+            last.height() < 44.0,
+            "line toast is {} px tall ({rects:?})",
+            last.height()
+        );
+        assert!(
+            last.width() < 460.0,
+            "line toast is {} px wide",
+            last.width()
+        );
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1400.0, 900.0));
+        assert!(
+            screen.contains_rect(last),
+            "toast {last:?} leaves the screen"
+        );
+        for pair in rects[rects.len() - 3..].windows(2) {
+            assert_eq!(pair[0], pair[1], "toast area moves between frames");
+        }
+        // Message and button share one row.
+        let undo = harness.get_by_label("Undo").rect();
+        let text = harness
+            .get_by_label("Boards 10 → 25 · all lines repriced")
+            .rect();
+        assert!(
+            (undo.center().y - text.center().y).abs() < 2.0 && undo.left() > text.right(),
+            "button {undo:?} isn't inline right of the message {text:?}"
+        );
+
+        // A second change while it shows replaces it: still one toast.
+        harness.state_mut().stack.push_action_line(
+            "boards",
+            "Boards 10 → 50 · all lines repriced",
+            ToastKind::Info,
+            "Undo",
+            "undo:10",
+        );
+        harness.run_steps(3);
+        assert_eq!(harness.get_all_by_label("Undo").count(), 1);
+        harness.get_by_label("Boards 10 → 50 · all lines repriced");
+        harness.get_by_label("Undo").click();
+        harness.run_steps(3);
+        let clicks = &harness.state().clicks;
+        assert_eq!(clicks.len(), 1);
+        assert_eq!(clicks[0].action_tag, "undo:10");
+        assert!(harness.state().stack.is_empty(), "Undo left the toast up");
     }
 }
 
