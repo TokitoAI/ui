@@ -111,6 +111,7 @@ All live in `tokito_ui::components` (aliased `c` above). Each takes
 | `badge` | `badge(ui, t, text) -> Response` | A small bordered count / status pill. |
 | `list_row` | `list_row(ui, t, job, selected) -> Response` | A full-width, left-aligned, hover-highlighted row. |
 | `text_input` | `text_input(ui, t, id_source, &mut String, hint, width) -> Response` | A bordered single-line input. |
+| `text_input_with_rows` | `text_input_with_rows(ui, t, id_source, &mut String, hint, width, rows) -> Response` | The same input chrome with bounded multiline editing and scrollable overflow; no content truncation. |
 | `search_field` | `search_field(ui, t, id_source, &mut String, hint, width) -> Response` | `text_input` with a leading magnifier. |
 | `secret_input` | `secret_input(ui, t, id_source, &mut String, hint, width) -> Response` | `text_input` that masks its content (API keys, secrets). |
 | `toggle` | `toggle(ui, t, &mut bool, label) -> Response` | An animated switch with a trailing label. |
