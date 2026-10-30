@@ -489,7 +489,58 @@ pub fn text_input(
         width,
         None,
         false,
+        1,
     )
+}
+
+/// The same bordered [`text_input`] with a bounded, scrollable multiline body.
+/// `rows` controls visible height, not how much text the user can enter.
+pub fn text_input_with_rows(
+    ui: &mut Ui,
+    t: &Tokens,
+    id_source: impl Hash + std::fmt::Debug,
+    value: &mut String,
+    hint: &str,
+    width: f32,
+    rows: usize,
+) -> Response {
+    bordered_input(
+        ui,
+        t,
+        egui::Id::new(id_source),
+        value,
+        hint,
+        width,
+        None,
+        false,
+        rows.max(2),
+    )
+}
+
+#[cfg(test)]
+mod multiline_input_tests {
+    use super::*;
+
+    #[test]
+    fn multiline_notes_keep_all_content_without_expanding_the_form_49() {
+        let ctx = egui::Context::default();
+        let mut value = (0..200)
+            .map(|n| format!("Note {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let original = value.clone();
+        let mut height = 0.0;
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let before = ui.cursor().min.y;
+            text_input_with_rows(ui, &Tokens::dark(), "notes", &mut value, "Notes", 300.0, 4);
+            height = ui.cursor().min.y - before;
+        });
+        assert_eq!(value, original);
+        assert!(
+            height > 34.0 && height < 160.0,
+            "bounded four-row field: {height}"
+        );
+    }
 }
 
 /// A bordered single-line input that **masks** its content (API keys, secrets).
@@ -513,6 +564,7 @@ pub fn secret_input(
         width,
         None,
         true,
+        1,
     )
 }
 
@@ -536,6 +588,7 @@ pub fn search_field(
         width,
         Some(icons::ph::MAGNIFYING_GLASS),
         false,
+        1,
     )
 }
 
@@ -550,8 +603,13 @@ fn bordered_input(
     width: f32,
     leading_glyph: Option<&str>,
     mask: bool,
+    rows: usize,
 ) -> Response {
-    let height = 34.0;
+    let height = if rows == 1 {
+        34.0
+    } else {
+        ui.text_style_height(&TextStyle::Body) * rows as f32 + t.space_3 * 2.0
+    };
     let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let focused = ui.memory(|m| m.has_focus(id));
     let border = if focused { t.accent } else { t.border };
@@ -575,25 +633,46 @@ fn bordered_input(
         rect.left() + 11.0
     };
     let edit_rect = Rect::from_min_max(
-        pos2(text_left, rect.top()),
-        pos2(rect.right() - 9.0, rect.bottom()),
+        pos2(
+            text_left,
+            rect.top() + if rows > 1 { t.space_3 } else { 0.0 },
+        ),
+        pos2(
+            rect.right() - 9.0,
+            rect.bottom() - if rows > 1 { t.space_3 } else { 0.0 },
+        ),
     );
-    let mut edit_ui = ui.new_child(
-        UiBuilder::new()
-            .max_rect(edit_rect)
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    edit_ui.add(
+    let mut edit_ui = ui.new_child(UiBuilder::new().max_rect(edit_rect).layout(if rows == 1 {
+        Layout::left_to_right(Align::Center)
+    } else {
+        Layout::top_down(Align::Min)
+    }));
+    edit_ui.set_clip_rect(edit_rect);
+    let edit = if rows == 1 {
         egui::TextEdit::singleline(value)
-            .id(id)
-            // Explicitly dim — egui's default hint color tracks the theme's
-            // weak text, which in our dark tokens is nearly full-ink and
-            // reads as real content.
-            .hint_text(egui::RichText::new(hint).color(t.text_3))
-            .frame(egui::Frame::NONE)
-            .password(mask)
-            .desired_width(edit_rect.width()),
-    )
+    } else {
+        egui::TextEdit::multiline(value)
+    };
+    let edit = edit
+        .id(id)
+        // Explicitly dim — egui's default hint color tracks the theme's
+        // weak text, which in our dark tokens is nearly full-ink and
+        // reads as real content.
+        .hint_text(egui::RichText::new(hint).color(t.text_3))
+        .frame(egui::Frame::NONE)
+        .password(mask)
+        .desired_width(edit_rect.width());
+    if rows == 1 {
+        edit_ui.add(edit)
+    } else {
+        egui::ScrollArea::vertical()
+            .id_salt(id.with("multiline_scroll"))
+            .max_height(edit_rect.height())
+            .min_scrolled_height(edit_rect.height())
+            .auto_shrink([false, false])
+            .show(&mut edit_ui, |ui| ui.add(edit))
+            .inner
+    }
 }
 
 /// A switch / toggle with a trailing `label`.
