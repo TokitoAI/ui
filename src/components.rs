@@ -66,8 +66,70 @@ pub fn card(ui: &mut Ui, t: &Tokens, size: Vec2, add_contents: impl FnOnce(&mut 
             .layout(Layout::top_down(Align::Min)),
     );
     content.set_clip_rect(rect);
+    // Card captions are navigation labels, not selectable document text.
+    // Selectable egui labels otherwise take the click from this card.
+    // Real child buttons/menus retain their own independent click targets.
+    content.style_mut().interaction.selectable_labels = false;
     add_contents(&mut content);
     response
+}
+
+#[cfg(test)]
+mod card_hit_target_tests {
+    use super::*;
+    use egui_kittest::Harness;
+
+    #[derive(Default)]
+    struct State {
+        opened: usize,
+        child_clicks: usize,
+        label: Rect,
+        child: Rect,
+        body: Pos2,
+    }
+
+    #[test]
+    fn captions_open_card_but_nested_buttons_do_not_47() {
+        let mut h = Harness::builder()
+            .with_size(vec2(400.0, 240.0))
+            .build_ui_state(
+                |ui, state: &mut State| {
+                    let t = Tokens::dark();
+                    let response = card(ui, &t, vec2(320.0, 180.0), |ui| {
+                        state.label = ui.label("Project name").rect;
+                        let button = text_button(ui, &t, ButtonKind::Secondary, "Menu", 30.0);
+                        state.child = button.rect;
+                        if button.clicked() {
+                            state.child_clicks += 1;
+                        }
+                    });
+                    state.body = response.rect.right_bottom() - vec2(12.0, 12.0);
+                    if response.clicked() {
+                        state.opened += 1;
+                    }
+                },
+                State::default(),
+            );
+        h.run_steps(2);
+        for (point, expected) in [(h.state().label.center(), 1), (h.state().body, 2)] {
+            h.hover_at(point);
+            h.run_steps(1);
+            h.drag_at(point);
+            h.run_steps(1);
+            h.drop_at(point);
+            h.run_steps(2);
+            assert_eq!(h.state().opened, expected);
+        }
+        let point = h.state().child.center();
+        h.hover_at(point);
+        h.run_steps(1);
+        h.drag_at(point);
+        h.run_steps(1);
+        h.drop_at(point);
+        h.run_steps(2);
+        assert_eq!(h.state().child_clicks, 1);
+        assert_eq!(h.state().opened, 2, "child actions must not also navigate");
+    }
 }
 
 /// A dashed "create new …" tile of fixed `size`.
