@@ -3714,14 +3714,55 @@ pub fn content_card(ui: &mut Ui, t: &Tokens, add_contents: impl FnOnce(&mut Ui))
 ///
 /// Used in inspector / property panels and detail cards. The label is muted
 /// (`text_2`), the value uses the primary `text` colour. Both are small.
+/// Long values wrap within their column instead of overlapping the label.
 pub fn inspector_row(ui: &mut Ui, t: &Tokens, label: &str, value: impl Into<String>) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(label).small().color(t.text_2));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(RichText::new(value.into()).small().color(t.text));
+    let value = value.into();
+    ui.columns(2, |columns| {
+        columns[0].add(egui::Label::new(RichText::new(label).small().color(t.text_2)).wrap());
+        columns[1].with_layout(Layout::top_down(Align::Max), |ui| {
+            ui.add(egui::Label::new(RichText::new(value).small().color(t.text)).wrap());
         });
     });
     ui.add_space(2.0);
+}
+
+#[cfg(test)]
+mod inspector_row_tests {
+    use super::*;
+
+    #[test]
+    fn long_values_wrap_without_overlapping_labels() {
+        let label = "Catalog part";
+        let value = "Device:R 330 [Resistor_SMD:R_0603_1608Metric]";
+        for width in [180.0, 300.0, 600.0] {
+            for tokens in [Tokens::dark(), Tokens::light()] {
+                let ctx = egui::Context::default();
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    ui.set_width(width);
+                    inspector_row(ui, &tokens, label, value);
+                });
+                let text_rect = |needle: &str| {
+                    output
+                        .shapes
+                        .iter()
+                        .find_map(|clipped| {
+                            if let egui::epaint::Shape::Text(text) = &clipped.shape {
+                                if text.galley.job.text == needle {
+                                    return Some(text.galley.rect.translate(text.pos.to_vec2()));
+                                }
+                            }
+                            None
+                        })
+                        .expect("label retains the complete text")
+                };
+                let key = text_rect(label);
+                let val = text_rect(value);
+                assert!(key.right() <= val.left(), "key/value overlap at {width}");
+                assert!(val.right() - key.left() <= width + 1.0);
+                assert!(val.height() > key.height(), "long value should wrap");
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
