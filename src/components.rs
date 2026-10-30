@@ -3745,13 +3745,11 @@ mod inspector_row_tests {
                     output
                         .shapes
                         .iter()
-                        .find_map(|clipped| {
-                            if let egui::epaint::Shape::Text(text) = &clipped.shape {
-                                if text.galley.job.text == needle {
-                                    return Some(text.galley.rect.translate(text.pos.to_vec2()));
-                                }
+                        .find_map(|clipped| match &clipped.shape {
+                            egui::epaint::Shape::Text(text) if text.galley.job.text == needle => {
+                                Some(text.galley.rect.translate(text.pos.to_vec2()))
                             }
-                            None
+                            _ => None,
                         })
                         .expect("label retains the complete text")
                 };
