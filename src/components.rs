@@ -79,13 +79,24 @@ mod card_hit_target_tests {
     use super::*;
     use egui_kittest::Harness;
 
-    #[derive(Default)]
     struct State {
         opened: usize,
         child_clicks: usize,
         label: Rect,
         child: Rect,
         body: Pos2,
+    }
+
+    impl Default for State {
+        fn default() -> Self {
+            Self {
+                opened: 0,
+                child_clicks: 0,
+                label: Rect::NOTHING,
+                child: Rect::NOTHING,
+                body: Pos2::ZERO,
+            }
+        }
     }
 
     #[test]
