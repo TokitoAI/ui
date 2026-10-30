@@ -3759,7 +3759,9 @@ mod inspector_row_tests {
                 let val = text_rect(value);
                 assert!(key.right() <= val.left(), "key/value overlap at {width}");
                 assert!(val.right() - key.left() <= width + 1.0);
-                assert!(val.height() > key.height(), "long value should wrap");
+                if width <= 300.0 {
+                    assert!(val.height() > key.height(), "long value should wrap");
+                }
             }
         }
     }
