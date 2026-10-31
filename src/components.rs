@@ -2514,6 +2514,90 @@ pub fn side_sheet<R>(
         .map(|r| r.inner)
 }
 
+/// Reserve a bottom footer before laying out a neighbouring scrolling body.
+/// Call this before [`scrollable_content`]; the footer stays reachable while
+/// long inspector content scrolls independently above it.
+pub fn docked_footer<R>(
+    ui: &mut Ui,
+    t: &Tokens,
+    id_source: impl Hash + std::fmt::Debug,
+    height: f32,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    let height = height.clamp(0.0, ui.available_height().max(0.0));
+    egui::Panel::bottom(egui::Id::new(id_source))
+        .exact_size(height)
+        .resizable(false)
+        .show_separator_line(false)
+        .frame(egui::Frame::new().fill(t.bg).inner_margin(egui::Margin {
+            top: t.space_2 as i8,
+            ..Default::default()
+        }))
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("footer_scroll")
+                .max_height(ui.available_height().max(0.0))
+                .auto_shrink([false, false])
+                .show(ui, add_contents)
+                .inner
+        })
+        .inner
+}
+
+/// A vertically scrollable body bounded by its allocated viewport. Compose
+/// after [`docked_footer`] so content cannot push persistent actions off-screen.
+pub fn scrollable_content<R>(
+    ui: &mut Ui,
+    _t: &Tokens,
+    id_source: impl Hash + std::fmt::Debug,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    egui::ScrollArea::vertical()
+        .id_salt(id_source)
+        .auto_shrink([false, false])
+        .max_height(ui.available_height().max(0.0))
+        .show(ui, add_contents)
+        .inner
+}
+
+#[cfg(test)]
+mod docked_footer_tests {
+    use super::*;
+
+    #[test]
+    fn long_body_cannot_push_footer_outside_short_or_narrow_viewport() {
+        for size in [vec2(280.0, 360.0), vec2(520.0, 800.0)] {
+            let ctx = egui::Context::default();
+            let t = Tokens::dark();
+            for _ in 0..3 {
+                let mut footer = Rect::NOTHING;
+                let mut body_clip = Rect::NOTHING;
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        docked_footer(ui, &t, "footer", 80.0, |ui| {
+                            footer =
+                                text_button(ui, &t, ButtonKind::Secondary, "All issues", 34.0).rect;
+                        });
+                        scrollable_content(ui, &t, "body", |ui| {
+                            body_clip = ui.clip_rect();
+                            for _ in 0..60 {
+                                ui.label("Long component property");
+                            }
+                        });
+                    },
+                );
+                assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(footer));
+                assert!(body_clip.bottom() <= footer.top());
+                assert!(body_clip.height() > 0.0);
+            }
+        }
+    }
+}
+
 /// A rounded square tile with a short centred caption (a package name,
 /// "LQFP-48") or, when `text` is empty, a centred Phosphor `glyph` — the
 /// visual anchor at the head of a detail view.
