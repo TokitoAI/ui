@@ -2521,17 +2521,26 @@ pub fn docked_footer<R>(
     ui: &mut Ui,
     t: &Tokens,
     id_source: impl Hash + std::fmt::Debug,
+    height: f32,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> R {
+    let height = height.clamp(0.0, ui.available_height().max(0.0));
     egui::Panel::bottom(egui::Id::new(id_source))
-        .min_size(0.0)
+        .exact_size(height)
         .resizable(false)
         .show_separator_line(false)
         .frame(egui::Frame::new().fill(t.bg).inner_margin(egui::Margin {
             top: t.space_2 as i8,
             ..Default::default()
         }))
-        .show(ui, add_contents)
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("footer_scroll")
+                .max_height(ui.available_height().max(0.0))
+                .auto_shrink([false, false])
+                .show(ui, add_contents)
+                .inner
+        })
         .inner
 }
 
@@ -2569,7 +2578,7 @@ mod docked_footer_tests {
                         ..Default::default()
                     },
                     |ui| {
-                        docked_footer(ui, &t, "footer", |ui| {
+                        docked_footer(ui, &t, "footer", 80.0, |ui| {
                             footer =
                                 text_button(ui, &t, ButtonKind::Secondary, "All issues", 34.0).rect;
                         });
