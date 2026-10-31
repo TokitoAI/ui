@@ -5089,6 +5089,9 @@ pub enum SuggestionCardStatus {
     /// the batch was proposed (see `docs/CHAT_SCHEMATIC_CONTROL.md`
     /// §Snapshot + staleness). The card is now read-only.
     StaleRejected,
+    /// Application was refused without document drift. Recovery belongs to
+    /// the host's durable failure card; this proposal must not offer Apply.
+    ApplyBlocked,
 }
 
 /// Per-row state for [`suggestion_card`]. The caller initialises one entry
@@ -5323,6 +5326,7 @@ fn suggestion_status_badge(ui: &mut Ui, t: &Tokens, status: &SuggestionCardStatu
         SuggestionCardStatus::AppliedPartial { .. } => "Applied partial",
         SuggestionCardStatus::Discarded => "Discarded",
         SuggestionCardStatus::StaleRejected => "Stale — schematic changed",
+        SuggestionCardStatus::ApplyBlocked => "Apply blocked",
     };
     let text = match status {
         SuggestionCardStatus::AppliedPartial { applied, total } => {
@@ -5331,6 +5335,51 @@ fn suggestion_status_badge(ui: &mut Ui, t: &Tokens, status: &SuggestionCardStatu
         _ => label.to_string(),
     };
     badge(ui, t, &text);
+}
+
+#[cfg(test)]
+mod blocked_suggestion_tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn blocked_application_is_read_only_without_claiming_document_drift() {
+        let mut harness = egui_kittest::Harness::builder().build_ui_state(
+            |ui, state: &mut SuggestionCardState| {
+                let action = suggestion_card(
+                    ui,
+                    &Tokens::dark(),
+                    "Proposed schematic edit",
+                    SuggestionCardStatus::ApplyBlocked,
+                    &[SuggestionOpRow {
+                        summary: "Connect verified pins",
+                        provenance_label: "",
+                    }],
+                    state,
+                );
+                assert!(!matches!(
+                    action,
+                    Some(SuggestionCardAction::ApplySelected)
+                        | Some(SuggestionCardAction::DiscardAll)
+                ));
+            },
+            SuggestionCardState::all_selected(1),
+        );
+        harness.run();
+        harness.get_by_label("Connect verified pins");
+        assert!(harness.query_by_label("Apply selected").is_none());
+        assert!(harness.query_by_label("Discard all").is_none());
+        assert!(harness
+            .query_by_label("Stale — schematic changed")
+            .is_none());
+        // Badges are painter primitives, not AccessKit labels. Verify the
+        // actual emitted text rather than querying an absent semantic node.
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            suggestion_status_badge(ui, &Tokens::dark(), &SuggestionCardStatus::ApplyBlocked);
+        });
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == "Apply blocked")));
+    }
 }
 
 // ---------------------------------------------------------------------------

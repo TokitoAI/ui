@@ -143,6 +143,7 @@ All live in `tokito_ui::components` (aliased `c` above). Each takes
 | `empty_state` | `empty_state(ui, t, message)` | Centred "nothing here" placeholder card. |
 | `gate_overlay` | `gate_overlay(ui, t, badge_icon, heading, body, button_icon, button_label) -> bool` | Full-bleed gated/locked state — heavy scrim, brand tile + corner badge, display heading, subline, primary CTA. Returns `true` when the CTA is clicked. |
 | `chat_activity` | `chat_activity(ui, t, id_source, label, detail)` | Assistant loading/activity bubble with subtle dots and status copy for slow background work. |
+| `suggestion_card` | `suggestion_card(ui, t, header, status, ops, state)` | Reviewable operations; `ApplyBlocked` is read-only without claiming document drift. Host recovery owns retry/correction. |
 
 ### Icons
 
