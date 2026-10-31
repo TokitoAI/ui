@@ -65,7 +65,7 @@ pub fn card(ui: &mut Ui, t: &Tokens, size: Vec2, add_contents: impl FnOnce(&mut 
             .max_rect(rect.shrink(t.space_4))
             .layout(Layout::top_down(Align::Min)),
     );
-    content.set_clip_rect(rect);
+    content.set_clip_rect(rect.intersect(ui.clip_rect()));
     // Card captions are navigation labels, not selectable document text.
     // Selectable egui labels otherwise take the click from this card.
     // Real child buttons/menus retain their own independent click targets.
@@ -647,7 +647,7 @@ fn bordered_input(
     } else {
         Layout::top_down(Align::Min)
     }));
-    edit_ui.set_clip_rect(edit_rect);
+    edit_ui.set_clip_rect(edit_rect.intersect(ui.clip_rect()));
     let edit = if rows == 1 {
         egui::TextEdit::singleline(value)
     } else {
@@ -2563,6 +2563,55 @@ pub fn scrollable_content<R>(
 #[cfg(test)]
 mod docked_footer_tests {
     use super::*;
+
+    #[test]
+    fn real_input_and_card_text_cannot_escape_body_clip_57() {
+        for size in [vec2(280.0, 360.0), vec2(520.0, 800.0)] {
+            let ctx = egui::Context::default();
+            let t = Tokens::dark();
+            for _ in 0..3 {
+                let mut body_clip = Rect::NOTHING;
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        docked_footer(ui, &t, "footer", 80.0, |ui| {
+                            ui.label("Persistent footer");
+                        });
+                        scrollable_content(ui, &t, "body", |ui| {
+                            body_clip = ui.clip_rect();
+                            for index in 0..30 {
+                                let mut value = format!("CLIP_GUARD input {index}");
+                                text_input(ui, &t, index, &mut value, "", 180.0);
+                                card(ui, &t, vec2(200.0, 60.0), |ui| {
+                                    ui.label(format!("CLIP_GUARD card {index}"));
+                                });
+                            }
+                        });
+                    },
+                );
+                let mut checked = 0;
+                for clipped in &output.shapes {
+                    if let egui::epaint::Shape::Text(text) = &clipped.shape {
+                        if text.galley.job.text.contains("CLIP_GUARD")
+                            && clipped.clip_rect.is_positive()
+                        {
+                            assert!(
+                                body_clip.expand(1.0).contains_rect(clipped.clip_rect),
+                                "nested text enlarged parent clip: {:?} outside {:?}",
+                                clipped.clip_rect,
+                                body_clip
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+                assert!(checked > 0, "real primitive text was rendered");
+            }
+        }
+    }
 
     #[test]
     fn long_body_cannot_push_footer_outside_short_or_narrow_viewport() {
