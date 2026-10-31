@@ -5375,10 +5375,8 @@ mod blocked_suggestion_tests {
         // Badges are painter primitives, not AccessKit labels. Verify the
         // actual emitted text rather than querying an absent semantic node.
         let ctx = egui::Context::default();
-        let output = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                suggestion_status_badge(ui, &Tokens::dark(), &SuggestionCardStatus::ApplyBlocked);
-            });
+        let output = ctx.run_ui(Default::default(), |ui| {
+            suggestion_status_badge(ui, &Tokens::dark(), &SuggestionCardStatus::ApplyBlocked);
         });
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == "Apply blocked")));
     }
