@@ -726,7 +726,8 @@ pub fn toggle(ui: &mut Ui, t: &Tokens, value: &mut bool, label: &str) -> Respons
 /// A centred modal dialog over a dimmed backdrop.
 ///
 /// Renders only while `*open` is `true`. Sets `*open = false` when the user
-/// presses Escape, clicks the backdrop, or clicks the close button.
+/// presses Escape, clicks the backdrop, or clicks the close button. Escape is
+/// consumed so later workspace handlers cannot act on the same dismissal.
 /// `add_contents` runs inside the dialog body (16 px inset, `width` wide).
 ///
 /// Call this at the top level of a frame (like a context-menu / overlay), not
@@ -742,7 +743,7 @@ pub fn modal(
     if !*open {
         return;
     }
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         *open = false;
         return;
     }
@@ -3600,6 +3601,7 @@ mod modal_tests {
     struct ModalApp {
         open: bool,
         clicks: usize,
+        background_escapes: usize,
         button_center: Option<egui::Pos2>,
         dialog_is_top_layer: bool,
     }
@@ -3616,6 +3618,9 @@ mod modal_tests {
                     self.clicks += 1;
                 }
             });
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.background_escapes += 1;
+            }
             if let Some(pos) = self.button_center {
                 self.dialog_is_top_layer = ctx.layer_id_at(pos)
                     == Some(egui::LayerId::new(
@@ -3638,6 +3643,7 @@ mod modal_tests {
             ModalApp {
                 open: true,
                 clicks: 0,
+                background_escapes: 0,
                 button_center: None,
                 dialog_is_top_layer: false,
             }
@@ -3647,6 +3653,11 @@ mod modal_tests {
         harness.key_press(egui::Key::Escape);
         harness.run();
         assert!(!harness.state().open);
+        assert_eq!(
+            harness.state().background_escapes,
+            0,
+            "modal dismissal leaked to workspace"
+        );
 
         harness.state_mut().open = true;
         harness.run();
@@ -3656,6 +3667,17 @@ mod modal_tests {
         assert_eq!(harness.state().clicks, 1);
         assert!(harness.state().open);
         assert!(harness.state().dialog_is_top_layer);
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert!(!harness.state().open);
+        assert_eq!(harness.state().background_escapes, 0);
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert_eq!(
+            harness.state().background_escapes,
+            1,
+            "closed modal swallowed workspace input"
+        );
     }
 }
 
