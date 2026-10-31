@@ -65,7 +65,7 @@ pub fn card(ui: &mut Ui, t: &Tokens, size: Vec2, add_contents: impl FnOnce(&mut 
             .max_rect(rect.shrink(t.space_4))
             .layout(Layout::top_down(Align::Min)),
     );
-    content.set_clip_rect(rect);
+    content.set_clip_rect(rect.intersect(ui.clip_rect()));
     // Card captions are navigation labels, not selectable document text.
     // Selectable egui labels otherwise take the click from this card.
     // Real child buttons/menus retain their own independent click targets.
@@ -647,7 +647,7 @@ fn bordered_input(
     } else {
         Layout::top_down(Align::Min)
     }));
-    edit_ui.set_clip_rect(edit_rect);
+    edit_ui.set_clip_rect(edit_rect.intersect(ui.clip_rect()));
     let edit = if rows == 1 {
         egui::TextEdit::singleline(value)
     } else {
