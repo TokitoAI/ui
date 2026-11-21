@@ -4212,6 +4212,8 @@ pub enum TabItem<'a> {
 ///
 /// Visual: selected tab is a filled accent pill; unselected tabs render an
 /// icon + label in muted ink with a subtle hover wash.
+/// When the full strip does not fit, retain the labels, omit decorative
+/// icons and dividers, and wrap only if the text-only strip still needs room.
 pub fn tab_bar(ui: &mut Ui, t: &Tokens, items: &[TabItem<'_>], selected: usize) -> Option<usize> {
     let mut clicked = None;
     egui::Frame::new()
@@ -4222,16 +4224,25 @@ pub fn tab_bar(ui: &mut Ui, t: &Tokens, items: &[TabItem<'_>], selected: usize) 
             (t.space_1) as i8,
         ))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            let full_width = items
+                .iter()
+                .map(|item| match item {
+                    TabItem::Tab { label, .. } => tab_pill_width(ui, label, true),
+                    TabItem::Divider => t.space_2 * 2.0 + 1.0,
+                })
+                .sum::<f32>()
+                + items.len().saturating_sub(1) as f32 * t.space_1;
+            let compact = full_width > ui.available_width();
+            ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = t.space_1;
                 for (i, item) in items.iter().enumerate() {
                     match item {
                         TabItem::Tab { icon, label } => {
-                            if tab_pill(ui, t, icon, label, selected == i) {
+                            if tab_pill(ui, t, (!compact).then_some(*icon), label, selected == i) {
                                 clicked = Some(i);
                             }
                         }
-                        TabItem::Divider => {
+                        TabItem::Divider if !compact => {
                             ui.add_space(t.space_2);
                             let (rect, _) = ui.allocate_exact_size(vec2(1.0, 18.0), Sense::hover());
                             ui.painter().line_segment(
@@ -4240,6 +4251,9 @@ pub fn tab_bar(ui: &mut Ui, t: &Tokens, items: &[TabItem<'_>], selected: usize) 
                             );
                             ui.add_space(t.space_2);
                         }
+                        // Keep the tab IDs (and keyboard focus) unchanged
+                        // when crossing the compact breakpoint.
+                        TabItem::Divider => ui.skip_ahead_auto_ids(1),
                     }
                 }
             });
@@ -4247,20 +4261,42 @@ pub fn tab_bar(ui: &mut Ui, t: &Tokens, items: &[TabItem<'_>], selected: usize) 
     clicked
 }
 
-fn tab_pill(ui: &mut Ui, t: &Tokens, icon: &str, label: &str, selected: bool) -> bool {
+const TAB_PAD: f32 = 12.0;
+const TAB_ICON_W: f32 = 18.0;
+const TAB_ICON_GAP: f32 = 6.0;
+
+fn tab_pill_width(ui: &Ui, label: &str, with_icon: bool) -> f32 {
+    let text = ui
+        .painter()
+        .layout_no_wrap(
+            label.to_owned(),
+            TextStyle::Body.resolve(ui.style()),
+            Color32::WHITE,
+        )
+        .size()
+        .x;
+    2.0 * TAB_PAD
+        + text
+        + if with_icon {
+            TAB_ICON_W + TAB_ICON_GAP
+        } else {
+            0.0
+        }
+}
+
+fn tab_pill(ui: &mut Ui, t: &Tokens, icon: Option<&str>, label: &str, selected: bool) -> bool {
     let h = 30.0;
-    // Pre-measure label width so the pill grows naturally.
-    let galley = ui.painter().layout_no_wrap(
-        label.to_string(),
-        TextStyle::Body.resolve(ui.style()),
-        if selected { t.accent_ink } else { t.text_2 },
-    );
-    let pad = 12.0;
-    let icon_w = 18.0;
-    let gap = 6.0;
-    let w = pad + icon_w + gap + galley.size().x + pad;
+    let w = tab_pill_width(ui, label, icon.is_some());
 
     let (rect, response) = ui.allocate_exact_size(vec2(w, h), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            label,
+        )
+    });
     let hv = hover_t(ui, response.id, response.hovered());
 
     // Active tab reads as a *defined* tinted pill (soft accent wash + 1px
@@ -4279,25 +4315,27 @@ fn tab_pill(ui: &mut Ui, t: &Tokens, icon: &str, label: &str, selected: bool) ->
     };
 
     ui.painter().rect_filled(rect, t.rounding_sm(), fill);
-    if selected {
+    if selected || response.has_focus() {
         ui.painter().rect_stroke(
             rect.shrink(0.5),
             t.rounding_sm(),
-            Stroke::new(1.0, t.accent),
+            Stroke::new(if response.has_focus() { 2.0 } else { 1.0 }, t.accent),
             egui::StrokeKind::Outside,
         );
     }
 
-    let mut x = rect.left() + pad;
+    let mut x = rect.left() + TAB_PAD;
     let center_y = rect.center().y;
-    ui.painter().text(
-        pos2(x + icon_w * 0.5, center_y),
-        egui::Align2::CENTER_CENTER,
-        icon,
-        icons::font(15.0),
-        ink,
-    );
-    x += icon_w + gap;
+    if let Some(icon) = icon {
+        ui.painter().text(
+            pos2(x + TAB_ICON_W * 0.5, center_y),
+            egui::Align2::CENTER_CENTER,
+            icon,
+            icons::font(15.0),
+            ink,
+        );
+        x += TAB_ICON_W + TAB_ICON_GAP;
+    }
     ui.painter().text(
         pos2(x, center_y),
         egui::Align2::LEFT_CENTER,
@@ -4307,6 +4345,76 @@ fn tab_pill(ui: &mut Ui, t: &Tokens, icon: &str, label: &str, selected: bool) ->
     );
 
     response.clicked()
+}
+
+#[cfg(test)]
+mod tab_bar_tests {
+    use super::*;
+    use crate::icons::ph;
+    use egui_kittest::{kittest::Queryable, Harness};
+
+    #[test]
+    fn studio_tabs_keep_labels_and_actions_reachable_when_narrow() {
+        let items = [
+            TabItem::Tab {
+                icon: ph::CHAT_CIRCLE,
+                label: "Chat",
+            },
+            TabItem::Divider,
+            TabItem::Tab {
+                icon: ph::TREE_STRUCTURE,
+                label: "Schematic",
+            },
+            TabItem::Tab {
+                icon: ph::CPU,
+                label: "PCB",
+            },
+            TabItem::Tab {
+                icon: ph::SHOPPING_CART,
+                label: "BOM",
+            },
+            TabItem::Tab {
+                icon: ph::DOWNLOAD_SIMPLE,
+                label: "Export",
+            },
+        ];
+        for width in [240.0, 430.0, 800.0] {
+            let t = Tokens::dark();
+            let mut initialized_fonts = false;
+            let mut harness = Harness::builder()
+                .with_size(vec2(width, 160.0))
+                .build_ui_state(
+                    |ui, clicked| {
+                        if !initialized_fonts {
+                            let mut fonts = egui::FontDefinitions::default();
+                            crate::theme::add_phosphor(&mut fonts);
+                            ui.ctx().set_fonts(fonts);
+                            initialized_fonts = true;
+                            ui.ctx().request_repaint();
+                            return;
+                        }
+                        if let Some(index) = tab_bar(ui, &t, &items, 3) {
+                            *clicked = Some(index);
+                        }
+                    },
+                    None,
+                );
+            harness.run();
+            for label in ["Chat", "Schematic", "PCB", "BOM", "Export"] {
+                let rect = harness.get_by_label(label).rect();
+                assert!(
+                    rect.left() >= 0.0 && rect.right() <= width,
+                    "{label} at {width}: {rect:?}"
+                );
+            }
+            let chat = harness.get_by_label("Chat").rect();
+            let export = harness.get_by_label("Export").rect();
+            assert_eq!(export.top() > chat.top(), width == 240.0);
+            harness.get_by_label("Export").click();
+            harness.run();
+            assert_eq!(*harness.state(), Some(5));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
