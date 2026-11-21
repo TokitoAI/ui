@@ -119,6 +119,7 @@ All live in `tokito_ui::components` (aliased `c` above). Each takes
 | `menu_item` | `menu_item(ui, t, glyph, label) -> bool` | One row of a `menu_button` popup. |
 | `popup_menu` | `popup_menu(&trigger, id_source, \|ui\| …)` | Attach a `menu_button`-style popup of `menu_item`s to any trigger response. |
 | `toolbar` | `toolbar(ui, t, height, \|ui\| left…, \|ui\| right…) -> Response` | One full-width row, every control on one centre line: a left group (chips, a filter field that shrinks first) and a right-to-left action group. |
+| `tab_bar` | `tab_bar(ui, t, items, selected) -> Option<usize>` | Labeled navigation with icons when there is room. Narrow strips preserve labels, omit decorative icons and dividers, and wrap as needed. |
 | `modal` | `modal(ctx, t, &mut bool, title, width, \|ui\| …)` | A centred dialog over a dimmed backdrop. |
 | `page_header` | `page_header(ui, t, title, subtitle)` | A large title over a muted subtitle. |
 | `section_header` | `section_header(ui, t, title, action) -> Option<Response>` | An `h2` with an optional right-aligned action link. |
